@@ -1,0 +1,35 @@
+schema_version = 1
+data_root = "<DATA_ROOT>"
+timezone = "America/Phoenix"
+
+[inbox]
+provider = "gmail_imap"
+# For mbox imports, set provider = "mbox" and add path = "<MBOX_PATH>".
+# Coverage trusts delivery/Received headers or the mbox separator. Message Date
+# and file-mtime fallbacks remain library-only and cannot satisfy history gates.
+address = "<INBOX_ADDRESS>"
+host = "imap.gmail.com"
+port = 993
+mailbox = "INBOX"
+keychain_service = "competitor-inbox-imap"
+backfill_months = 12
+overlap_days = 14
+
+[filters]
+sender_domains = []
+brand_aliases = {}
+
+[classification]
+mode = "deterministic_with_optional_ai"
+model = "claude-sonnet-4-6"
+api_key_environment_variable = "ANTHROPIC_API_KEY"
+max_visible_text_characters = 4000
+
+[dashboard]
+output_name = "dashboard.html"
+open_after_build = false
+
+[schedule]
+hour = 7
+minute = 0
+run_at_load = true

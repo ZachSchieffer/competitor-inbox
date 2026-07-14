@@ -1,0 +1,44 @@
+# Secrets and private configuration
+.env
+.env.*
+!.env.example
+*.token
+*.key
+*.pem
+config.toml
+
+# Production data and generated private outputs
+data/
+raw/
+outputs/
+logs/
+state/
+ai-cache/
+master.json
+*.eml
+*.mbox
+*.mbx
+*.sqlite
+*.sqlite3
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# macOS and editors
+.DS_Store
+.idea/
+.vscode/
+*~
+
