@@ -34,6 +34,9 @@ _CSP = (
 
 _HERO_WIDTH = 1080
 _HERO_HEIGHT = 1350
+_HERO_FEED_PREVIEW_WIDTH = 390
+_HERO_MIN_FEED_COPY_PX = 14
+_HERO_FEED_COPY_SOURCE_PX = 40
 _HERO_NAMES = ("hero-brand.html", "hero-portfolio.html")
 _BROWSER_CANDIDATES = (
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -53,6 +56,43 @@ _CSS = r"""
 @media(max-width:900px){.shell{width:min(100% - 28px,1240px)}.mast{padding-top:28px}.mast h1{margin-top:44px}.section-head{display:block}.coverage{display:flex;width:100%;max-width:100%;margin-top:14px;white-space:normal;line-height:1.35}.metrics,.scope-grid,.actions,.method{grid-template-columns:1fr}.grid-two{grid-template-columns:1fr}.occasion-grid{grid-template-columns:1fr 1fr}.quadrant{grid-template-columns:125px 1fr 72px}.metric{min-height:120px}.metric .label{margin-top:18px}section{padding:20px}.brandline{display:flex;flex-direction:column;align-items:flex-start}.stamp,.freshness{margin-top:14px}}
 @media(max-width:520px){.occasion-grid{grid-template-columns:1fr}.mast h1{font-size:43px}.window{display:block}.window span{display:block;margin-top:7px}.quadrant{grid-template-columns:1fr 60px}.quadrant .bar{grid-column:1/-1;grid-row:2}.number{grid-column:2}.section-head h2{font-size:24px}}
 @media print{@page{size:auto;margin:12mm}body{background:#fff}section{box-shadow:none;break-inside:avoid}.hero-page{width:1080px;height:1350px;padding:64px}}
+"""
+
+_HERO_READABILITY_CSS = f"""
+.hero-page{{padding:44px}}
+.hero-sheet{{min-height:1262px;padding:44px 52px}}
+.hero-page .hero-top{{align-items:center}}
+.hero-page .hero-kicker{{font-size:30px;letter-spacing:.055em}}
+.hero-page .stamp{{font-size:32px;padding:9px 14px;letter-spacing:.045em}}
+.hero-page .hero-title{{font-size:76px;line-height:.98;margin:58px 0 24px;max-width:900px;text-wrap:balance}}
+.hero-page .hero-support.hero-support{{font-size:{_HERO_FEED_COPY_SOURCE_PX}px;line-height:1.1;letter-spacing:-.018em}}
+.hero-page .hero-sub.hero-support{{max-width:900px;color:var(--muted);text-wrap:pretty}}
+.hero-page .accent-rule{{margin-top:28px}}
+.hero-page .hero-census{{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:38px}}
+.hero-page .hero-cell{{min-height:150px;padding:14px 18px;display:flex;flex-direction:column;justify-content:center}}
+.hero-page .hero-cell b{{font-size:56px;line-height:1}}
+.hero-page .hero-cell .hero-support.hero-support{{display:block;margin-top:8px}}
+.hero-page .hero-bottom{{gap:32px;padding-top:26px;align-items:flex-start}}
+.hero-page .hero-bottom>div{{flex:1}}
+.hero-page .hero-bottom>div:last-child{{max-width:none;text-align:right}}
+.hero-page .hero-bottom .hero-support.hero-support{{display:block;color:var(--muted)}}
+.hero-page .hero-bottom strong.hero-support{{color:var(--ink);font-weight:760}}
+.dashboard-hero.hero-sheet{{padding:30px 34px}}
+.dashboard-hero .hero-title{{font-size:60px;line-height:.98;max-width:920px;margin:26px 0 10px}}
+.dashboard-hero .hero-sub.hero-support{{max-width:920px}}
+.dashboard-hero .accent-rule{{height:6px;margin-top:14px}}
+.dashboard-hero .dashboard-product{{margin-top:16px}}
+.dashboard-hero .dashboard-product-bar{{padding:10px 16px;font-size:24px;line-height:1.2}}
+.dashboard-hero .dashboard-product-bar strong{{font-size:26px}}
+.dashboard-hero .dashboard-product .hero-census{{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0;padding:14px}}
+.dashboard-hero .dashboard-product .hero-cell{{min-height:108px;padding:10px 14px;flex-direction:row;align-items:center;justify-content:flex-start;gap:14px}}
+.dashboard-hero .dashboard-product .hero-cell b{{font-size:50px}}
+.dashboard-hero .dashboard-product .hero-cell .hero-support.hero-support{{margin-top:0}}
+.dashboard-hero .update-proof{{display:grid;grid-template-columns:1fr;gap:8px;padding:0 14px 14px}}
+.dashboard-hero .update-line{{margin:0;border:1px solid var(--line);border-radius:10px;background:var(--accent-soft);padding:8px 12px}}
+.dashboard-hero .package-grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:0 14px 14px}}
+.dashboard-hero .package-item{{min-height:82px;padding:8px 12px;display:flex;align-items:center}}
+.dashboard-hero .hero-bottom{{padding-top:18px}}
 """
 
 
@@ -834,36 +874,36 @@ def render_hero(summary: Mapping[str, Any], variant: str = "brand") -> str:
     quadrant_cells = "".join(
         '<div class="hero-cell">'
         f"<b>{int(row.get('count',0)):,}</b>"
-        f"<span>{_e(row.get('name'))} | {_pct(int(row.get('count',0)),total)}</span></div>"
+        f'<span class="hero-support">{_e(row.get("name"))} | '
+        f"{_pct(int(row.get('count',0)),total)}</span></div>"
         for row in context["quadrants"]
     )
     if context["layout"] == "dashboard":
         update = context["update_contract"]
         product_surface = f"""<div class="dashboard-product">
-<div class="dashboard-product-bar"><strong>{_e(context['footer_label'])}</strong><span>{total:,} qualified broadcasts | {int(context['observed_days']):,} observed days</span></div>
 <div class="hero-census">{quadrant_cells}</div>
-<div class="update-proof" aria-label="Update proof">
-<div class="update-item"><strong>Current through {_e(update['current_through'])}</strong><span>Frozen inbox receipt window</span></div>
-<div class="update-item"><strong>Daily {_e(update['schedule_label'])} update</strong><span>Runs at load too</span></div>
-<div class="update-item"><strong>{int(update['incremental_overlap_days'])}-day overlap</strong><span>Catches late-arriving mail</span></div>
-<div class="update-item"><strong>{_e(update['mac_on_dependency'])}</strong><span>Local scheduler, not cloud uptime</span></div>
+<div class="update-proof" aria-label="Current through {_e(update['current_through'])}. Update proof. Local scheduler, not cloud uptime">
+<p class="update-line hero-support">Daily {_e(update['schedule_label'])} update | {int(update['incremental_overlap_days'])}-day overlap | {_e(update['mac_on_dependency'])}</p>
 </div>
-<div class="package-head"><span>Owner-level dashboard</span><span>{_e(context['coverage_label'])}</span></div>
 <div class="package-grid">
-<div class="package-item"><strong>Competitor comparison</strong><span>Cadence, mix, and posture by brand</span></div>
-<div class="package-item"><strong>Evergreen + promo mix</strong><span>4-part census with visible denominators</span></div>
-<div class="package-item"><strong>Seasonal planner</strong><span>Occasion timing with lookback gates</span></div>
-<div class="package-item"><strong>Messaging library + action plan</strong><span>Sanitized examples and owner decisions</span></div>
+<div class="package-item"><strong class="hero-support">Competitor comparison</strong></div>
+<div class="package-item"><strong class="hero-support">Evergreen + promo mix</strong></div>
+<div class="package-item"><strong class="hero-support">Seasonal planner</strong></div>
+<div class="package-item"><strong class="hero-support">Messaging library + action plan</strong></div>
 </div></div>"""
     else:
         product_surface = f'<div class="hero-census">{quadrant_cells}</div>'
-    sheet_class = "hero-sheet dashboard-hero" if context["layout"] == "dashboard" else "hero-sheet"
+    sheet_class = (
+        "hero-sheet dashboard-hero"
+        if context["layout"] == "dashboard"
+        else "hero-sheet poster-hero"
+    )
     body_class = "prototype" if meta.get("illustrative_prototype") else ""
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=1080">
-<meta http-equiv="Content-Security-Policy" content="{_e(_CSP)}"><meta name="referrer" content="no-referrer"><title>Competitor Inbox hero</title><style>{_CSS}</style></head>
+<meta http-equiv="Content-Security-Policy" content="{_e(_CSP)}"><meta name="referrer" content="no-referrer"><title>Competitor Inbox hero</title><style>{_CSS}{_HERO_READABILITY_CSS}</style></head>
 <body class="{body_class}"><main class="hero-page"><article class="{sheet_class}" data-census-scope="{_e(context['scope'])}"><div class="hero-top"><span class="hero-kicker">The Competitor Inbox</span>{_stamp(summary)}</div>
-<h1 class="hero-title">{_e(context['title'])}</h1><p class="hero-sub">{_e(context['subtitle'])}</p><div class="accent-rule"></div>{product_surface}
-<div class="hero-bottom"><div><strong>{_e(_date_window(context['window']))}</strong>{int(context['observed_days']):,} observed days</div><div><strong>{_e(context['coverage_label'])}</strong>{_e(context['coverage_note'])}</div></div>
+<h1 class="hero-title">{_e(context['title'])}</h1><p class="hero-sub hero-support">{_e(context['subtitle'])}</p><div class="accent-rule"></div>{product_surface}
+<div class="hero-bottom"><div><strong class="hero-support">{_e(_date_window(context['window']))}</strong><span class="hero-support">{int(context['observed_days']):,} observed days</span></div><div aria-label="{_e(context['coverage_note'])}"><strong class="hero-support">{_e(context['coverage_label'])}</strong></div></div>
 </article></main></body></html>"""
 
 

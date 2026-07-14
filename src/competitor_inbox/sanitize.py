@@ -330,6 +330,56 @@ CONTEXT_IDENTIFIER_RE = re.compile(
     r"(?!\[)(?P<identifier>(?:(?=[^\n]*\d)[A-Za-z0-9 ._/#-]{1,80}|"
     r"[A-Z]{2,12}))[ \t]*$"
 )
+INLINE_DELIVERY_IDENTIFIER_RE = re.compile(
+    r"(?ix)"
+    r"(?P<prefix>\b(?:order|shipment|package)[ \t]*"
+    r"(?:(?:number|no\.?|id)[ \t]*)?"
+    r"(?:[-#:=\u2013\u2014][ \t]*)?(?:\([ \t]*)?)"
+    r"(?!\[)"
+    r"(?P<identifier>(?:"
+    r"(?-i:(?:(?=[A-Z0-9_./-]{0,19}\d)[A-Z0-9_./-]{2,20}[ \t]"
+    r"[A-Z0-9_./-]{2,20}|[A-Z0-9_./-]{2,20}[ \t]"
+    r"(?=[A-Z0-9_./-]{0,19}\d)[A-Z0-9_./-]{2,20}))"
+    r"|(?=[A-Za-z0-9_./-]{4,40}(?![A-Za-z0-9_./-]))"
+    r"(?=[A-Za-z0-9_./-]*[A-Za-z])(?=[A-Za-z0-9_./-]*\d)"
+    r"[A-Za-z0-9][A-Za-z0-9_./-]{2,38}[A-Za-z0-9]|\d{4,20}))"
+    r"(?=[ \t]*(?:\)[ \t]*)?(?:[,:;|.!?\-\u2013\u2014][ \t]*)?(?:"
+    r"(?:(?:has|have|had|is|was|were|will(?:[ \t]+be)?)[ \t]+)?"
+    r"(?:(?:just|now|already)[ \t]+)?(?:(?:been|being)[ \t]+)?"
+    r"(?:confirmed|received|processed|ready|fulfilled|"
+    r"shipped|dispatched|despatched|delivered|cancelled|canceled|refunded|returned)"
+    r"|(?:is|was|will[ \t]+be)[ \t]+(?:(?:now|already)[ \t]+)?"
+    r"(?:on[ \t]+(?:the|its)[ \t]+way|"
+    r"out[ \t]+for[ \t]+delivery|in[ \t]+transit|ready[ \t]+for[ \t]+pickup)"
+    r"|(?:(?:has|have|had)[ \t]+)?(?:(?:just|now)[ \t]+)?arrived"
+    r"|arriv(?:es|ing)"
+    r"|(?:delivery|shipment|tracking)[ \t]+(?:update|status|confirmation|"
+    r"details?|information))\b)"
+)
+DELIVERY_STATUS_IDENTIFIER_RE = re.compile(
+    r"(?ix)"
+    r"(?P<prefix>\b(?:order|shipment|package|tracking)[ \t]+(?:"
+    r"(?:confirmation|status|reference)(?:[ \t]+(?:number|no\.?|id|reference))?|"
+    r"confirmed|(?:has|is|was)[ \t]+(?:been[ \t]+)?confirmed|"
+    r"(?:tracking[ \t]+)?(?:number|no\.?|id))"
+    r"[ \t]*(?:[-#:=\u2013\u2014][ \t]*){0,3})"
+    r"(?!\[)"
+    r"(?P<identifier>(?:"
+    r"(?=[A-Za-z0-9_./-]{4,40}(?![A-Za-z0-9_./-]))"
+    r"(?=[A-Za-z0-9_./-]*[A-Za-z])(?=[A-Za-z0-9_./-]*\d)"
+    r"[A-Za-z0-9][A-Za-z0-9_./-]{2,38}[A-Za-z0-9]|\d{4,20}))\b"
+)
+DELIVERY_CODE_IDENTIFIER_RE = re.compile(
+    r"(?ix)"
+    r"(?P<prefix>\b(?:order|shipment|package|tracking)"
+    r"(?:[ \t]+(?:confirmation|status|reference|tracking))?[ \t]+)"
+    r"code[ \t]*(?:[-#:=\u2013\u2014][ \t]*){0,3}"
+    r"(?!\[)"
+    r"(?P<identifier>(?:"
+    r"(?=[A-Za-z0-9_./-]{4,40}(?![A-Za-z0-9_./-]))"
+    r"(?=[A-Za-z0-9_./-]*[A-Za-z])(?=[A-Za-z0-9_./-]*\d)"
+    r"[A-Za-z0-9][A-Za-z0-9_./-]{2,38}[A-Za-z0-9]|\d{4,20}))\b"
+)
 
 
 def stable_hash(value: str | bytes, *, prefix: str = "sha256") -> str:
@@ -461,6 +511,10 @@ def _opaque_short_tracking_value(value: str) -> bool:
 def _redact_standalone_short_tracking(match: re.Match[str]) -> str:
     value = match.group("value")
     return "[tracking removed]" if _opaque_short_tracking_value(value) else match.group(0)
+
+
+def _redact_inline_delivery_identifier(match: re.Match[str]) -> str:
+    return f"{match.group('prefix')}[recipient identifier removed]"
 
 
 def _unpunctuated_context_name_is_private(match: re.Match[str]) -> bool:
@@ -763,6 +817,18 @@ def _sanitize_residual_layers(
         )
         text = CONTEXT_PHONE_RE.sub("[recipient phone removed]", text)
         text = CONTEXT_IDENTIFIER_RE.sub("[recipient identifier removed]", text)
+        text = INLINE_DELIVERY_IDENTIFIER_RE.sub(
+            _redact_inline_delivery_identifier,
+            text,
+        )
+        text = DELIVERY_STATUS_IDENTIFIER_RE.sub(
+            _redact_inline_delivery_identifier,
+            text,
+        )
+        text = DELIVERY_CODE_IDENTIFIER_RE.sub(
+            _redact_inline_delivery_identifier,
+            text,
+        )
         text = BRACKET_PERSONALIZATION_RE.sub("[personalization removed]", text)
         text = MARKDOWN_PLACEHOLDER_LINK_RE.sub(_markdown_link_label, text)
         text = TRUNCATED_MARKDOWN_TARGET_RE.sub(_markdown_link_label, text)
@@ -817,6 +883,18 @@ def sanitize_text(
     )
     text = CONTEXT_PHONE_RE.sub("[recipient phone removed]", text)
     text = CONTEXT_IDENTIFIER_RE.sub("[recipient identifier removed]", text)
+    text = INLINE_DELIVERY_IDENTIFIER_RE.sub(
+        _redact_inline_delivery_identifier,
+        text,
+    )
+    text = DELIVERY_STATUS_IDENTIFIER_RE.sub(
+        _redact_inline_delivery_identifier,
+        text,
+    )
+    text = DELIVERY_CODE_IDENTIFIER_RE.sub(
+        _redact_inline_delivery_identifier,
+        text,
+    )
     text = MERGE_TAG_RE.sub("[personalization removed]", text)
     text = TOKEN_ASSIGNMENT_RE.sub("[personalization removed]", text)
     text = ENCODED_SHORT_TRACKING_RE.sub("[tracking removed]", text)
@@ -930,6 +1008,9 @@ def contains_direct_identifier(
             CONTEXT_NAME_RE,
             CONTEXT_PHONE_RE,
             CONTEXT_IDENTIFIER_RE,
+            INLINE_DELIVERY_IDENTIFIER_RE,
+            DELIVERY_STATUS_IDENTIFIER_RE,
+            DELIVERY_CODE_IDENTIFIER_RE,
             PERSONALIZED_ACCOUNT_VALUE_LINE_RE,
             LEADING_NAME_RE,
         )

@@ -512,9 +512,189 @@ def test_context_labeled_recipient_identifiers_are_redacted(raw: str) -> None:
     assert contains_direct_identifier(safe) is False
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    (
+        (
+            "Your order ZX81Q700 has shipped",
+            "Your order [recipient identifier removed] has shipped",
+        ),
+        (
+            "Shipping update: order AB-123456 is out for delivery",
+            "Shipping update: order [recipient identifier removed] is out for delivery",
+        ),
+        (
+            "Shipment PKG90817 is on its way",
+            "Shipment [recipient identifier removed] is on its way",
+        ),
+        (
+            "Package 987654 has been delivered",
+            "Package [recipient identifier removed] has been delivered",
+        ),
+        (
+            "Delivery for order QR901234 will be dispatched tomorrow",
+            "Delivery for order [recipient identifier removed] will be dispatched tomorrow",
+        ),
+        (
+            "Order ZX81Q700 shipped",
+            "Order [recipient identifier removed] shipped",
+        ),
+        (
+            "Your order AB-123456 has just shipped",
+            "Your order [recipient identifier removed] has just shipped",
+        ),
+        (
+            "Shipment PKG90817 is now on the way",
+            "Shipment [recipient identifier removed] is now on the way",
+        ),
+        (
+            "Order AB/123456 has shipped",
+            "Order [recipient identifier removed] has shipped",
+        ),
+        (
+            "Order AB.123456 has shipped",
+            "Order [recipient identifier removed] has shipped",
+        ),
+        (
+            "Order AB 123456 has shipped",
+            "Order [recipient identifier removed] has shipped",
+        ),
+        (
+            "Order confirmation #123456",
+            "Order confirmation #[recipient identifier removed]",
+        ),
+        (
+            "Your order confirmation #123456",
+            "Your order confirmation #[recipient identifier removed]",
+        ),
+        (
+            "Order confirmed: 123456",
+            "Order confirmed: [recipient identifier removed]",
+        ),
+        (
+            "Shipment confirmation PKG12345",
+            "Shipment confirmation [recipient identifier removed]",
+        ),
+        (
+            "Tracking confirmation TRK/12345",
+            "Tracking confirmation [recipient identifier removed]",
+        ),
+        (
+            "Your order ZX81Q700 has been fulfilled",
+            "Your order [recipient identifier removed] has been fulfilled",
+        ),
+        (
+            "Your order ZX81Q700 was despatched",
+            "Your order [recipient identifier removed] was despatched",
+        ),
+        (
+            "Order confirmation number: 123456",
+            "Order confirmation number: [recipient identifier removed]",
+        ),
+        (
+            "Order confirmation ID AB12345",
+            "Order confirmation ID [recipient identifier removed]",
+        ),
+        (
+            "Shipment confirmation number SHIP12345",
+            "Shipment confirmation number [recipient identifier removed]",
+        ),
+        (
+            "Order status number 123456",
+            "Order status number [recipient identifier removed]",
+        ),
+        (
+            "Order reference number 123456",
+            "Order reference number [recipient identifier removed]",
+        ),
+        (
+            "Your order #1234 has shipped",
+            "Your order #[recipient identifier removed] has shipped",
+        ),
+        (
+            "Your order confirmation #1234",
+            "Your order confirmation #[recipient identifier removed]",
+        ),
+        (
+            "Order confirmation: #1234",
+            "Order confirmation: #[recipient identifier removed]",
+        ),
+        (
+            "Order reference: #1234",
+            "Order reference: #[recipient identifier removed]",
+        ),
+        (
+            "Shipment tracking number: #1234",
+            "Shipment tracking number: #[recipient identifier removed]",
+        ),
+        (
+            "Package tracking ID: #PKG1234",
+            "Package tracking ID: #[recipient identifier removed]",
+        ),
+        (
+            "Order status code: STAT1234",
+            "Order status [recipient identifier removed]",
+        ),
+        (
+            "Shipment reference code: SHIP1234",
+            "Shipment reference [recipient identifier removed]",
+        ),
+        (
+            "Order confirmation code AB1234",
+            "Order confirmation [recipient identifier removed]",
+        ),
+        (
+            "Order status code STAT1234",
+            "Order status [recipient identifier removed]",
+        ),
+        (
+            "Shipment reference code SHIP1234",
+            "Shipment reference [recipient identifier removed]",
+        ),
+        (
+            "Package tracking code PKG1234",
+            "Package tracking [recipient identifier removed]",
+        ),
+    ),
+)
+def test_inline_order_and_shipment_identifiers_are_redacted(
+    raw: str,
+    expected: str,
+) -> None:
+    assert contains_direct_identifier(raw) is True
+
+    safe = sanitize_text(raw)
+
+    assert safe == expected
+    assert sanitize_text(safe) == safe
+    assert contains_direct_identifier(safe) is False
+
+
 def test_generic_order_quantity_and_promo_code_are_preserved() -> None:
     raw = "Order 2 products and apply promo code SAVE20."
 
+    assert sanitize_text(raw) == raw
+    assert contains_direct_identifier(raw) is False
+
+
+@pytest.mark.parametrize(
+    "raw",
+    (
+        "Your order has shipped",
+        "Your first order ships free",
+        "Holiday orders ship free today",
+        "Order today and save 20%",
+        "Free shipping on orders over $50",
+        "Shipment update: 20% off sitewide",
+        "Package 2 best sellers and get free shipping",
+        "Order 2 products shipped free with expedited checkout",
+        "Order confirmation emails reduce support questions",
+        "Shipment confirmation template for your store",
+        "Order confirmed for 20% off",
+        "Use code SAVE20 on your next order",
+    ),
+)
+def test_inline_delivery_identifier_rule_preserves_marketing_copy(raw: str) -> None:
     assert sanitize_text(raw) == raw
     assert contains_direct_identifier(raw) is False
 
