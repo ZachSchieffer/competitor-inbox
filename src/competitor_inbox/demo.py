@@ -3,20 +3,21 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import os
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from .analysis import analyze_message
 from .aggregate import aggregate_records
+from .store import atomic_write_json
 
 
 DEMO_STAMP = "ILLUSTRATIVE PROTOTYPE"
 DEMO_ACCOUNT = "Northstar Apparel"
 DEMO_START = date(2025, 7, 15)
 DEMO_DAYS = 365
+DEMO_TOTAL = 1_260
+DEMO_GENERATED_AT = datetime(2026, 7, 14, 23, 59, tzinfo=timezone.utc)
 DEMO_QUADRANTS = {
     "Evergreen content": 580,
     "Everyday promotion": 491,
@@ -160,9 +161,14 @@ def generate_demo_records() -> list[dict[str, Any]]:
 
 
 def demo_summary() -> dict[str, Any]:
-    summary = aggregate_records(generate_demo_records(), illustrative=True)
+    summary = aggregate_records(
+        generate_demo_records(),
+        illustrative=True,
+        generated_at=DEMO_GENERATED_AT,
+    )
+    summary.setdefault("metadata", {})["stamp"] = DEMO_STAMP
     actual = {row["name"]: row["count"] for row in summary["quadrants"]}
-    if actual != DEMO_QUADRANTS or summary["broadcast_count"] != 1260:
+    if actual != DEMO_QUADRANTS or summary["broadcast_count"] != DEMO_TOTAL:
         raise AssertionError(f"Demo cross-foot failed: {actual}")
     return summary
 
@@ -171,8 +177,6 @@ def write_demo_dataset(output_path: str | Path) -> Path:
     """Write the public-safe fixture atomically and return its absolute path."""
 
     destination = Path(output_path).expanduser().resolve()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
     payload = {
         "stamp": DEMO_STAMP,
         "account": DEMO_ACCOUNT,
@@ -182,8 +186,7 @@ def write_demo_dataset(output_path: str | Path) -> Path:
         },
         "records": generate_demo_records(),
     }
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temporary, destination)
+    atomic_write_json(destination, payload)
     return destination
 
 
@@ -191,9 +194,11 @@ __all__ = [
     "DEMO_ACCOUNT",
     "DEMO_BRANDS",
     "DEMO_DAYS",
+    "DEMO_GENERATED_AT",
     "DEMO_QUADRANTS",
     "DEMO_STAMP",
     "DEMO_START",
+    "DEMO_TOTAL",
     "demo_summary",
     "generate_demo_records",
     "write_demo_dataset",

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
 import sys
 import webbrowser
-from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -23,23 +24,51 @@ from .config import (
     load_config,
     save_config,
 )
-from .coverage import assert_coverage_cross_foot, coverage_markdown
+from .coverage import coverage_markdown
 from .dashboard import (
     generate_dashboard,
     render_hero_pngs,
     write_freeze_manifest,
     write_hero_candidates,
 )
-from .demo import DEMO_QUADRANTS, demo_summary, generate_demo_records, write_demo_dataset
+from .demo import (
+    DEMO_ACCOUNT,
+    DEMO_QUADRANTS,
+    DEMO_STAMP,
+    DEMO_TOTAL,
+    demo_summary,
+    write_demo_dataset,
+)
 from .keychain import has_password, prompt_store
+from .locking import AlreadyRunning, run_lock
 from .pipeline import analyze_private_store, dashboard_records, ingest, pipeline_result_json
 from .schedule import install as install_schedule
 from .schedule import remove as remove_schedule
 from .schedule import status as schedule_status
-from .store import MasterStore, atomic_write_json
+from .store import (
+    PRIVATE_DIR_MODE,
+    MasterStore,
+    UnsafeDataRootError,
+    atomic_write_bytes,
+    atomic_write_json,
+    read_bytes_no_follow,
+)
 
 
 EARLY_GATE_EXIT = 4
+
+_OUTPUT_PACKAGE_FILES = (
+    "coverage.json",
+    "coverage.md",
+    "dashboard.html",
+    "dashboard.previous.html",
+    "census.json",
+    "freeze-manifest.json",
+    "heroes/hero-brand.html",
+    "heroes/hero-portfolio.html",
+    "heroes/hero-brand.png",
+    "heroes/hero-portfolio.png",
+)
 
 
 def _data_root(args: argparse.Namespace) -> Path:
@@ -137,7 +166,22 @@ def _bind_coverage_integrity(summary: dict[str, Any], result: Any) -> None:
     )
 
 
-def _render_real(config: AppConfig, result: Any) -> dict[str, object]:
+def _remove_private_file(path: Path) -> None:
+    if path.is_symlink():
+        raise UnsafeDataRootError("private output files cannot be symlinks")
+    if not path.exists():
+        return
+    if not path.is_file():
+        raise UnsafeDataRootError("private output path is not a regular file")
+    path.unlink()
+
+
+def _render_real(
+    config: AppConfig,
+    result: Any,
+    *,
+    render_screenshots: bool = False,
+) -> dict[str, object]:
     store = MasterStore(config.data_root)
     records = dashboard_records(store.load())
     summary = aggregate_records(records, pipeline_counts=_pipeline_counts(result), illustrative=False)
@@ -153,7 +197,12 @@ def _render_real(config: AppConfig, result: Any) -> dict[str, object]:
     _bind_coverage_integrity(summary, result)
     verify_cross_foot(summary)
     hero_paths = write_hero_candidates(summary, store.root / "outputs" / "heroes")
-    hero_screenshots = render_hero_pngs(hero_paths)
+    if render_screenshots:
+        hero_screenshots = render_hero_pngs(hero_paths)
+    else:
+        hero_screenshots = []
+        for hero in hero_paths:
+            _remove_private_file(hero.with_suffix(".png"))
     dashboard = generate_dashboard(summary, store.root / "outputs" / "dashboard.html")
     atomic_write_json(store.root / "outputs" / "census.json", summary)
     git_sha, git_dirty = _git_state()
@@ -170,11 +219,126 @@ def _render_real(config: AppConfig, result: Any) -> dict[str, object]:
         "dashboard": str(dashboard),
         "hero_candidates": [str(path) for path in hero_paths],
         "hero_screenshots": [str(path) for path in hero_screenshots],
+        "hero_screenshot_mode": (
+            "rendered" if render_screenshots else "not requested; dashboard build is browser-free"
+        ),
         "freeze_manifest": str(freeze),
         "broadcasts": summary["broadcast_count"],
         "brands": summary["brand_count"],
         "cross_foot": summary["cross_foot"],
     }
+
+
+def _private_child_directory(root: Path, name: str) -> Path:
+    """Create one private directory immediately below a hardened data root."""
+
+    if not name or Path(name).name != name:
+        raise ValueError("private child directory must be one path component")
+    destination = root / name
+    if destination.is_symlink():
+        raise UnsafeDataRootError("private output directories cannot be symlinks")
+    destination.mkdir(exist_ok=True, mode=PRIVATE_DIR_MODE)
+    if destination.is_symlink() or not destination.is_dir():
+        raise UnsafeDataRootError("private output path is not a directory")
+    resolved = destination.resolve(strict=True)
+    if resolved.parent != root.resolve(strict=True):
+        raise UnsafeDataRootError("private output directory escaped the data root")
+    os.chmod(resolved, PRIVATE_DIR_MODE)
+    return resolved
+
+
+def _render_demo(config: AppConfig) -> dict[str, object]:
+    """Build the complete credential-free demo package."""
+
+    store = MasterStore(config.data_root)
+    root = _private_child_directory(store.root, "demo")
+    hero_root = _private_child_directory(root, "heroes")
+    dataset = write_demo_dataset(root / "northstar-apparel.json")
+    summary = demo_summary()
+    summary_path = root / "demo-summary.json"
+    atomic_write_json(summary_path, summary)
+    dashboard = generate_dashboard(summary, root / "dashboard.html")
+    heroes = write_hero_candidates(summary, hero_root)
+    git_sha, git_dirty = _git_state()
+    freeze = write_freeze_manifest(
+        summary,
+        dashboard,
+        heroes,
+        root / "freeze-manifest.json",
+        git_sha=git_sha,
+        git_dirty=git_dirty,
+    )
+    return {
+        "stamp": DEMO_STAMP,
+        "account": DEMO_ACCOUNT,
+        "dataset": str(dataset),
+        "summary": str(summary_path),
+        "dashboard": str(dashboard),
+        "hero_candidates": [str(path) for path in heroes],
+        "freeze_manifest": str(freeze),
+        "messages": summary["broadcast_count"],
+        "quadrants": {row["name"]: row["count"] for row in summary["quadrants"]},
+        "cross_foot": summary["cross_foot"],
+    }
+
+
+def _snapshot_output_package(root: Path) -> dict[str, bytes | None]:
+    """Capture every managed output that must move as one evidence generation."""
+
+    output_root = root / "outputs"
+    snapshot: dict[str, bytes | None] = {}
+    for relative in _OUTPUT_PACKAGE_FILES:
+        path = output_root / relative
+        if path.is_symlink():
+            raise UnsafeDataRootError("managed output files cannot be symlinks")
+        snapshot[relative] = read_bytes_no_follow(path) if path.is_file() else None
+    return snapshot
+
+
+def _restore_output_package(root: Path, snapshot: dict[str, bytes | None]) -> None:
+    """Restore a complete prior evidence generation after any failed update."""
+
+    output_root = root / "outputs"
+    for relative, prior in snapshot.items():
+        path = output_root / relative
+        if prior is None:
+            _remove_private_file(path)
+        else:
+            atomic_write_bytes(path, prior)
+
+
+def _record_update_failure(
+    root: Path,
+    prior_run: dict[str, Any],
+    exc: Exception,
+) -> None:
+    store = MasterStore(root)
+    store.write_state(
+        "run",
+        {
+            "status": "failed",
+            "last_attempt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "last_success": prior_run.get("last_success"),
+            "error_type": type(exc).__name__,
+            "update_errors": 1,
+            "dashboard_replaced": False,
+        },
+    )
+
+
+def _notify_update_failure() -> None:
+    if sys.platform != "darwin":
+        return
+    subprocess.run(
+        [
+            "osascript",
+            "-e",
+            'display notification "The dashboard was not replaced." with title "Competitor Inbox update failed"',
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def command_doctor(args: argparse.Namespace) -> int:
@@ -217,7 +381,8 @@ def command_doctor(args: argparse.Namespace) -> int:
 
 def command_setup(args: argparse.Namespace) -> int:
     root = ensure_private_data_root(_data_root(args))
-    config_path = root / "config.toml"
+    configured_path = getattr(args, "config", None)
+    config_path = Path(configured_path).expanduser() if configured_path else root / "config.toml"
     config = load_config(config_path, data_root=root)
     if not config_path.exists():
         mode = input("Source [imap/mbox] (imap): ").strip().casefold() or "imap"
@@ -265,62 +430,59 @@ def command_backfill(args: argparse.Namespace) -> int:
 
 def command_update(args: argparse.Namespace) -> int:
     config = _config(args)
+    root = ensure_private_data_root(config.data_root)
+    snapshot: dict[str, bytes | None] | None = None
+    prior_run: dict[str, Any] = {}
     try:
-        result = ingest(config, months=12, incremental=True)
-        if not result.early_gate.passed:
-            _print(pipeline_result_json(result), as_json=args.json)
-            return EARLY_GATE_EXIT
-        analyzed = analyze_private_store(config)
-        rendered = _render_real(config, analyzed)
-        _print(rendered, as_json=args.json)
+        with run_lock(root / "state"):
+            store = MasterStore(root)
+            snapshot = _snapshot_output_package(root)
+            prior_run = store.read_state("run")
+            result = ingest(config, months=12, incremental=True)
+            if not result.early_gate.passed:
+                _restore_output_package(root, snapshot)
+                gate_error = RuntimeError("early data gate failed")
+                _record_update_failure(root, prior_run, gate_error)
+                _notify_update_failure()
+                _print(pipeline_result_json(result), as_json=args.json)
+                return EARLY_GATE_EXIT
+            analyzed = analyze_private_store(config)
+            rendered = _render_real(config, analyzed)
+            _print(rendered, as_json=args.json)
+            return 0
+    except AlreadyRunning:
+        _print(
+            {
+                "status": "skipped",
+                "reason": "another Competitor Inbox update is already running",
+            },
+            as_json=args.json,
+        )
         return 0
     except Exception as exc:
-        if sys.platform == "darwin":
-            subprocess.run(
-                [
-                    "osascript",
-                    "-e",
-                    'display notification "The prior dashboard was retained." with title "Competitor Inbox update failed"',
-                ],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+        rollback_error: Exception | None = None
+        if snapshot is not None:
+            try:
+                _restore_output_package(root, snapshot)
+            except Exception as rollback_exc:
+                rollback_error = rollback_exc
+        try:
+            _record_update_failure(root, prior_run, rollback_error or exc)
+        except Exception:
+            pass
+        _notify_update_failure()
         print(f"Update failed safely: {type(exc).__name__}", file=sys.stderr)
+        if rollback_error is not None:
+            print(
+                f"Output rollback also failed safely: {type(rollback_error).__name__}",
+                file=sys.stderr,
+            )
         return 2
 
 
 def command_demo(args: argparse.Namespace) -> int:
     config = _config(args)
-    root = ensure_private_data_root(config.data_root) / "demo"
-    dataset = write_demo_dataset(root / "northstar-apparel.json")
-    summary = demo_summary()
-    summary_path = root / "demo-summary.json"
-    atomic_write_json(summary_path, summary)
-    dashboard = generate_dashboard(summary, root / "dashboard.html")
-    heroes = write_hero_candidates(summary, root / "heroes")
-    git_sha, git_dirty = _git_state()
-    freeze = write_freeze_manifest(
-        summary,
-        dashboard,
-        heroes,
-        root / "freeze-manifest.json",
-        git_sha=git_sha,
-        git_dirty=git_dirty,
-    )
-    _print(
-        {
-            "stamp": "ILLUSTRATIVE PROTOTYPE",
-            "dataset": str(dataset),
-            "dashboard": str(dashboard),
-            "hero_candidates": [str(path) for path in heroes],
-            "freeze_manifest": str(freeze),
-            "messages": summary["broadcast_count"],
-            "quadrants": {row["name"]: row["count"] for row in summary["quadrants"]},
-            "cross_foot": summary["cross_foot"],
-        },
-        as_json=args.json,
-    )
+    _print(_render_demo(config), as_json=args.json)
     return 0
 
 
@@ -328,17 +490,241 @@ def command_build(args: argparse.Namespace) -> int:
     config = _config(args)
     store = MasterStore(config.data_root)
     if store.master_path.exists():
-        analyzed = analyze_private_store(config)
-        rendered = _render_real(config, analyzed)
+        with run_lock(store.root / "state"):
+            snapshot = _snapshot_output_package(store.root)
+            try:
+                analyzed = analyze_private_store(config)
+                rendered = _render_real(
+                    config,
+                    analyzed,
+                    render_screenshots=bool(getattr(args, "render_heroes", False)),
+                )
+            except Exception:
+                _restore_output_package(store.root, snapshot)
+                raise
     else:
-        summary = demo_summary()
-        demo_root = store.root / "demo"
-        rendered = {
-            "dashboard": str(generate_dashboard(summary, demo_root / "dashboard.html")),
-            "mode": "ILLUSTRATIVE PROTOTYPE",
-        }
+        rendered = _render_demo(config)
     _print(rendered, as_json=args.json)
     return 0
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(read_bytes_no_follow(path)).hexdigest()
+
+
+def _static_html_checks(
+    checks: dict[str, Any],
+    path: Path,
+    *,
+    prefix: str,
+    require_stamp: bool,
+    require_freshness: bool = False,
+) -> None:
+    checks[f"{prefix}_exists"] = path.is_file() and not path.is_symlink()
+    if not checks[f"{prefix}_exists"]:
+        return
+    text = read_bytes_no_follow(path).decode("utf-8")
+    folded = text.casefold()
+    checks[f"{prefix}_private"] = is_private_mode(path)
+    checks[f"{prefix}_csp"] = (
+        "Content-Security-Policy" in text
+        and "default-src &#x27;none&#x27;" in text
+    )
+    checks[f"{prefix}_no_script"] = "<script" not in folded
+    checks[f"{prefix}_no_remote_urls"] = (
+        "http://" not in folded and "https://" not in folded
+    )
+    if require_stamp:
+        checks[f"{prefix}_prototype_stamp"] = DEMO_STAMP in text
+    if require_freshness:
+        checks[f"{prefix}_freshness_badge"] = 'class="freshness"' in text
+
+
+def _verify_demo_package(store: MasterStore) -> dict[str, Any]:
+    checks: dict[str, Any] = {}
+    root = store.root / "demo"
+    dataset_path = root / "northstar-apparel.json"
+    summary_path = root / "demo-summary.json"
+    dashboard_path = root / "dashboard.html"
+    freeze_path = root / "freeze-manifest.json"
+    heroes = [
+        root / "heroes" / "hero-brand.html",
+        root / "heroes" / "hero-portfolio.html",
+    ]
+
+    checks["demo_directory_private"] = root.is_dir() and is_private_mode(root)
+    required = [dataset_path, summary_path, dashboard_path, freeze_path, *heroes]
+    checks["demo_files_present"] = all(path.is_file() and not path.is_symlink() for path in required)
+    checks["demo_files_private"] = checks["demo_files_present"] and all(
+        is_private_mode(path) for path in required
+    )
+    if not checks["demo_files_present"]:
+        return checks
+
+    dataset = json.loads(read_bytes_no_follow(dataset_path))
+    records = list(dataset.get("records", []))
+    checks["demo_dataset_stamp"] = dataset.get("stamp") == DEMO_STAMP
+    checks["demo_account"] = dataset.get("account") == DEMO_ACCOUNT
+    checks["demo_messages"] = len(records) == DEMO_TOTAL
+    checks["demo_record_ids_unique"] = len({row.get("record_id") for row in records}) == DEMO_TOTAL
+    checks["demo_records_fully_stamped"] = all(
+        row.get("illustrative_prototype") is True
+        and row.get("data_classification") == DEMO_STAMP
+        and row.get("demo_account") == DEMO_ACCOUNT
+        for row in records
+    )
+
+    expected_summary = demo_summary()
+    summary = json.loads(read_bytes_no_follow(summary_path))
+    checks["demo_summary_deterministic"] = summary == expected_summary
+    checks["demo_quadrants"] = {
+        row["name"]: row["count"] for row in summary.get("quadrants", [])
+    } == DEMO_QUADRANTS
+    checks["demo_cross_foot"] = bool(summary.get("cross_foot", {}).get("passed"))
+    checks["demo_summary_stamp"] = (
+        summary.get("metadata", {}).get("illustrative_prototype") is True
+        and summary.get("metadata", {}).get("stamp") == DEMO_STAMP
+    )
+
+    _static_html_checks(
+        checks,
+        dashboard_path,
+        prefix="dashboard",
+        require_stamp=True,
+        require_freshness=True,
+    )
+    for index, path in enumerate(heroes, start=1):
+        _static_html_checks(
+            checks,
+            path,
+            prefix=f"hero_{index}",
+            require_stamp=True,
+        )
+
+    freeze = json.loads(read_bytes_no_follow(freeze_path))
+    census_bytes = json.dumps(
+        summary,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    checks["freeze_stamp"] = (
+        freeze.get("illustrative_prototype") is True
+        and freeze.get("stamp") == DEMO_STAMP
+    )
+    checks["freeze_message_count"] = freeze.get("qualified_broadcasts") == DEMO_TOTAL
+    checks["freeze_census_hash"] = freeze.get("census_sha256") == hashlib.sha256(census_bytes).hexdigest()
+    checks["freeze_dashboard_hash"] = freeze.get("dashboard", {}).get("sha256") == _sha256(dashboard_path)
+    frozen_heroes = list(freeze.get("hero_html", []))
+    checks["freeze_hero_hashes"] = len(frozen_heroes) == 2 and {
+        row.get("sha256") for row in frozen_heroes
+    } == {_sha256(path) for path in heroes}
+    return checks
+
+
+def _verify_production_package(store: MasterStore) -> dict[str, Any]:
+    """Verify one frozen production output generation without mutating source data."""
+
+    checks: dict[str, Any] = {}
+    output_root = store.root / "outputs"
+    dashboard_path = output_root / "dashboard.html"
+    census_path = output_root / "census.json"
+    coverage_path = output_root / "coverage.json"
+    freeze_path = output_root / "freeze-manifest.json"
+    heroes = [
+        output_root / "heroes" / "hero-brand.html",
+        output_root / "heroes" / "hero-portfolio.html",
+    ]
+    screenshots = [path.with_suffix(".png") for path in heroes]
+    required = [dashboard_path, census_path, coverage_path, freeze_path, *heroes]
+    checks["production_files_present"] = all(
+        path.is_file() and not path.is_symlink() for path in required
+    )
+    checks["production_files_private"] = checks["production_files_present"] and all(
+        is_private_mode(path) for path in required
+    )
+    if not checks["production_files_present"]:
+        return checks
+
+    census = json.loads(read_bytes_no_follow(census_path))
+    coverage = json.loads(read_bytes_no_follow(coverage_path))
+    freeze = json.loads(read_bytes_no_follow(freeze_path))
+    try:
+        verify_cross_foot(census)
+    except Exception:
+        checks["production_cross_foot"] = False
+    else:
+        checks["production_cross_foot"] = True
+    checks["early_data_gate"] = coverage.get("early_gate", {}).get("passed") is True
+
+    _static_html_checks(
+        checks,
+        dashboard_path,
+        prefix="dashboard",
+        require_stamp=False,
+        require_freshness=True,
+    )
+
+    census_bytes = json.dumps(
+        census,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    checks["freeze_census_hash"] = (
+        freeze.get("census_sha256") == hashlib.sha256(census_bytes).hexdigest()
+    )
+    checks["freeze_dashboard_hash"] = (
+        freeze.get("dashboard", {}).get("sha256") == _sha256(dashboard_path)
+    )
+    frozen_heroes = list(freeze.get("hero_html", []))
+    checks["freeze_hero_hashes"] = len(frozen_heroes) == len(heroes) and {
+        row.get("sha256") for row in frozen_heroes if isinstance(row, dict)
+    } == {_sha256(path) for path in heroes}
+
+    screenshot_entries = list(freeze.get("screenshots", []))
+    if screenshot_entries:
+        checks["freeze_screenshot_files"] = len(screenshot_entries) == len(screenshots) and all(
+            path.is_file() and not path.is_symlink() and is_private_mode(path)
+            for path in screenshots
+        )
+        checks["freeze_screenshot_hashes"] = checks["freeze_screenshot_files"] and {
+            row.get("sha256")
+            for row in screenshot_entries
+            if isinstance(row, dict)
+        } == {_sha256(path) for path in screenshots}
+        checks["freeze_screenshot_dimensions"] = all(
+            isinstance(row, dict)
+            and row.get("width") == 1080
+            and row.get("height") == 1350
+            for row in screenshot_entries
+        )
+    else:
+        checks["freeze_screenshot_files"] = all(not path.exists() for path in screenshots)
+        checks["freeze_screenshot_hashes"] = True
+        checks["freeze_screenshot_dimensions"] = True
+
+    quadrants = {
+        str(row.get("name")): int(row.get("count", 0))
+        for row in census.get("quadrants", [])
+        if isinstance(row, dict)
+    }
+    frozen_quadrants = {
+        str(name): int(value.get("count", 0))
+        for name, value in freeze.get("metrics", {}).get("quadrants", {}).items()
+        if isinstance(value, dict)
+    }
+    checks["freeze_message_count"] = (
+        freeze.get("qualified_broadcasts") == int(census.get("broadcast_count", 0))
+        and freeze.get("metrics", {}).get("qualified_broadcasts")
+        == int(census.get("broadcast_count", 0))
+    )
+    checks["freeze_quadrants"] = frozen_quadrants == quadrants
+    checks["freeze_window"] = freeze.get("window") == {
+        "first": census.get("metadata", {}).get("first_observed", ""),
+        "last": census.get("metadata", {}).get("last_observed", ""),
+    }
+    return checks
 
 
 def command_verify(args: argparse.Namespace) -> int:
@@ -346,26 +732,9 @@ def command_verify(args: argparse.Namespace) -> int:
     store = MasterStore(config.data_root)
     checks: dict[str, Any] = {}
     if store.master_path.exists():
-        result = analyze_private_store(config)
-        assert_coverage_cross_foot(result.coverage, require_quadrants=True)
-        checks["production_cross_foot"] = True
-        checks["early_data_gate"] = result.early_gate.passed
-        dashboard = store.root / "outputs" / "dashboard.html"
+        checks.update(_verify_production_package(store))
     else:
-        summary = demo_summary()
-        checks["demo_messages"] = summary["broadcast_count"] == 1260
-        checks["demo_quadrants"] = {
-            row["name"]: row["count"] for row in summary["quadrants"]
-        } == DEMO_QUADRANTS
-        checks["demo_cross_foot"] = bool(summary["cross_foot"]["passed"])
-        dashboard = store.root / "demo" / "dashboard.html"
-    if dashboard.exists():
-        text = dashboard.read_text(encoding="utf-8")
-        checks["dashboard_csp"] = "Content-Security-Policy" in text and "default-src &#x27;none&#x27;" in text
-        checks["dashboard_no_script"] = "<script" not in text.casefold()
-        checks["dashboard_no_remote_urls"] = "http://" not in text.casefold() and "https://" not in text.casefold()
-    else:
-        checks["dashboard_exists"] = False
+        checks.update(_verify_demo_package(store))
     checks["passed"] = all(value is True for value in checks.values())
     _print(checks, as_json=args.json)
     return 0 if checks["passed"] else 2
@@ -385,11 +754,20 @@ def command_open(args: argparse.Namespace) -> int:
 
 
 def command_privacy(args: argparse.Namespace) -> int:
-    repo = Path.cwd().resolve()
-    script = repo / "scripts" / "privacy_audit.py"
-    if not script.is_file():
+    candidates = [Path.cwd().resolve(), Path(__file__).resolve().parents[2]]
+    repo = next(
+        (
+            candidate
+            for candidate in candidates
+            if (candidate / ".git").exists()
+            and (candidate / "scripts" / "privacy_audit.py").is_file()
+        ),
+        None,
+    )
+    if repo is None:
         print("Run privacy-check from the repository root.", file=sys.stderr)
         return 2
+    script = repo / "scripts" / "privacy_audit.py"
     command = [sys.executable, str(script), "--repo", str(repo)]
     if args.json:
         command.append("--json")
@@ -399,7 +777,15 @@ def command_privacy(args: argparse.Namespace) -> int:
 def command_schedule(args: argparse.Namespace) -> int:
     config = _config(args)
     if args.schedule_command == "install":
-        _print({"installed": str(install_schedule(config))}, as_json=args.json)
+        config_path = (
+            Path(args.config).expanduser().resolve(strict=True)
+            if getattr(args, "config", None)
+            else None
+        )
+        _print(
+            {"installed": str(install_schedule(config, config_path=config_path))},
+            as_json=args.json,
+        )
     elif args.schedule_command == "status":
         _print(schedule_status(config), as_json=args.json)
     elif args.schedule_command == "remove":
@@ -413,6 +799,13 @@ def _common(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--data-root", type=Path)
     subparser.add_argument("--config", type=Path)
     subparser.add_argument("--json", action="store_true")
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be at least 1")
+    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -436,7 +829,13 @@ def build_parser() -> argparse.ArgumentParser:
         _common(child)
         child.set_defaults(handler=handler)
         if name == "backfill":
-            child.add_argument("--months", type=int, default=12)
+            child.add_argument("--months", type=_positive_int, default=12)
+        elif name == "build":
+            child.add_argument(
+                "--render-heroes",
+                action="store_true",
+                help="also render 1080x1350 PNGs; requires a local Chromium-family browser",
+            )
 
     schedule = subparsers.add_parser("schedule")
     _common(schedule)

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import AppConfig, atomic_write_text, ensure_private_data_root
+from .store import PRIVATE_FILE_MODE, read_bytes_no_follow
 
 
 LABEL = "com.zhsecom.competitor-inbox"
@@ -21,34 +22,61 @@ def _domain() -> str:
     return f"gui/{os.getuid()}"
 
 
-def install(config: AppConfig, *, dry_run: bool = False) -> Path:
+def launch_agent_payload(
+    config: AppConfig,
+    *,
+    config_path: Path | None = None,
+) -> dict[str, Any]:
+    """Return the secret-free LaunchAgent contract for a daily local update."""
+
     root = ensure_private_data_root(config.data_root)
-    target = plist_path()
+    arguments = [
+        sys.executable,
+        "-m",
+        "competitor_inbox",
+        "update",
+        "--data-root",
+        str(root),
+    ]
+    if config_path is not None:
+        requested = Path(config_path).expanduser()
+        if requested.is_symlink() or not requested.is_file():
+            raise ValueError("scheduled custom config must be an existing regular file")
+        arguments.extend(["--config", str(requested.resolve(strict=True))])
     payload: dict[str, Any] = {
         "Label": LABEL,
-        "ProgramArguments": [
-            sys.executable,
-            "-m",
-            "competitor_inbox",
-            "update",
-            "--data-root",
-            str(root),
-        ],
+        "ProgramArguments": arguments,
         "RunAtLoad": True,
         "StartCalendarInterval": {"Hour": 7, "Minute": 0},
         "ProcessType": "Background",
         "StandardOutPath": str(root / "logs" / "launchd.stdout.log"),
         "StandardErrorPath": str(root / "logs" / "launchd.stderr.log"),
     }
+    serialized = plistlib.dumps(payload, fmt=plistlib.FMT_XML).decode("utf-8").casefold()
+    forbidden = ("anthropic_api_key", "app_password", "oauth", "cookie")
+    if any(token in serialized for token in forbidden):
+        raise ValueError("LaunchAgent payload contains a forbidden secret field")
+    return payload
+
+
+def install(
+    config: AppConfig,
+    *,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+) -> Path:
+    root = ensure_private_data_root(config.data_root)
+    target = plist_path()
+    payload = launch_agent_payload(config, config_path=config_path)
     if dry_run:
         return target
     for log_name in ("launchd.stdout.log", "launchd.stderr.log"):
         log_path = root / "logs" / log_name
-        log_path.touch(exist_ok=True, mode=0o600)
-        os.chmod(log_path, 0o600)
+        log_path.touch(exist_ok=True, mode=PRIVATE_FILE_MODE)
+        os.chmod(log_path, PRIVATE_FILE_MODE)
     target.parent.mkdir(parents=True, exist_ok=True)
     data = plistlib.dumps(payload, fmt=plistlib.FMT_XML).decode("utf-8")
-    atomic_write_text(target, data, mode=0o600)
+    atomic_write_text(target, data, mode=PRIVATE_FILE_MODE)
     subprocess.run(["launchctl", "bootout", _domain(), str(target)], check=False, capture_output=True)
     subprocess.run(["launchctl", "bootstrap", _domain(), str(target)], check=True, capture_output=True)
     return target
@@ -63,6 +91,7 @@ def remove() -> bool:
 
 
 def status(config: AppConfig) -> dict[str, Any]:
+    root = ensure_private_data_root(config.data_root)
     target = plist_path()
     query = subprocess.run(
         ["launchctl", "print", f"{_domain()}/{LABEL}"],
@@ -70,13 +99,13 @@ def status(config: AppConfig) -> dict[str, Any]:
         capture_output=True,
         text=True,
     )
-    state_path = config.data_root / "state" / "run.json"
+    state_path = root / "state" / "run.json"
     state: dict[str, Any] = {}
     if state_path.exists():
         import json
 
         try:
-            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state = json.loads(read_bytes_no_follow(state_path))
         except Exception:
             state = {"state_error": "unreadable"}
     return {
@@ -89,6 +118,13 @@ def status(config: AppConfig) -> dict[str, Any]:
         "last_success": state.get("last_success"),
         "new_records": state.get("new_distinct_messages"),
         "failures": int(state.get("parse_failures") or 0)
-        + int(state.get("ingestion_errors") or 0),
+        + int(state.get("ingestion_errors") or 0)
+        + int(state.get("update_errors") or 0),
+        "incremental_overlap_days": 14,
+        "process_lock": "one complete update at a time",
+        "failure_behavior": "atomic replacement; prior dashboard retained",
         "note": "Updates require this Mac to be on or to wake.",
     }
+
+
+__all__ = ["LABEL", "install", "launch_agent_payload", "plist_path", "remove", "status"]

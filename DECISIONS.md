@@ -306,3 +306,72 @@ evidence from local and automated runs can be compared directly.
 - Impact: Checkpoint A numbers, HTML, screenshots, census, and Git source state
   can be tied to one immutable manifest.
 - Status: complete.
+
+## 2026-07-14T12:23:02Z: Demo builds as one deterministic public package
+
+- Authority: Phase 4 demo and fresh-install requirements.
+- Decision: make both `demo` and the no-production-data path of `build`
+  regenerate the full Northstar Apparel package. Bind the fixed 1,260-message
+  census, both hero surfaces, and the dashboard into a stamped freeze manifest.
+- Reason: a dashboard-only fallback could drift from the dataset and did not
+  prove that every demo surface was illustrative.
+- Impact: the dataset and census are deterministic across clean installs, every
+  private demo file uses mode `0600`, and `verify` checks records, quadrants,
+  stamps, CSP, hashes, and directory modes without requesting credentials.
+- Status: complete.
+
+## 2026-07-14T12:23:02Z: One lock and rollback boundary covers the full update
+
+- Authority: Phase 4 scheduler safety requirements.
+- Decision: hold a separate private process lock around ingestion, analysis,
+  rendering, and replacement. Snapshot the full managed output generation before
+  that boundary and restore every file if any later stage fails.
+- Reason: stage-level ingestion locks did not prevent 2 scheduled runs from
+  overlapping during analysis or rendering, and a failure after HTML replacement
+  could otherwise leave a partial package.
+- Impact: overlapping LaunchAgent runs skip cleanly. A failed build restores the
+  prior coverage, dashboard, census, hero files, and freeze manifest, records a
+  failed run state, and sends only a non-sensitive local notification.
+- Status: complete.
+
+## 2026-07-14T12:23:02Z: LaunchAgent remains local and secret-free
+
+- Authority: Phase 4 LaunchAgent contract.
+- Decision: keep credentials and API configuration out of the plist. The job
+  invokes the installed module, `update`, the private data-root path, and the
+  private config path when the user explicitly selected one. It runs at 7:00 AM
+  local with `RunAtLoad`.
+- Reason: Keychain and private config are the approved credential boundaries.
+  LaunchAgent environment variables would create another secret surface.
+- Impact: logs use mode `0600`, status reports the 14-day overlap, full-run lock,
+  rollback behavior, and Mac-on dependency, and the plist contract is covered by
+  tests.
+- Status: complete.
+
+## 2026-07-14T12:42:50Z: Normal dashboard builds remain browser-free
+
+- Authority: fresh-install and no-hidden-dependency requirements.
+- Decision: generate static hero HTML during every real build, but render PNG
+  launch images only when `build --render-heroes` is requested. Scheduled
+  updates never invoke a browser.
+- Reason: screenshot production is a distribution task. Making it part of every
+  local dashboard refresh created an undocumented Chrome-family dependency and
+  an unnecessary daily failure surface.
+- Impact: `doctor`, `demo`, `build`, `update`, and `verify` work without Chrome.
+  The optional launch-image command documents its browser requirement.
+- Status: complete.
+
+## 2026-07-14T12:42:50Z: Verification is read-only and generation-bound
+
+- Authority: Phase 4 verification, freshness, and fresh-install requirements.
+- Decision: production `verify` reads the frozen output package without running
+  analysis or optional AI. It cross-checks the census, dashboard, hero files,
+  optional screenshots, coverage gate, window, and manifest hashes. The
+  dashboard carries an explicit successful-generation freshness badge.
+- Reason: verification must detect mixed output generations and must not mutate
+  data or make an Anthropic request. Clean-install evidence must also prove no
+  unconditional runtime dependency or machine-specific user-home path remains.
+- Impact: a stale or partially replaced package fails closed, and the fresh
+  install test runs with closed stdin, `pip check`, metadata inspection, private
+  artifact checks, and local-path scanning.
+- Status: complete.
