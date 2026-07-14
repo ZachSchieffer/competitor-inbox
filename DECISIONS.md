@@ -375,3 +375,25 @@ evidence from local and automated runs can be compared directly.
   install test runs with closed stdin, `pip check`, metadata inspection, private
   artifact checks, and local-path scanning.
 - Status: complete.
+
+## 2026-07-14T13:56:05Z: Launch hero priority is explicit and denominator-led
+
+- Authority: approved launch hook rule and the generic product-usefulness
+  requirement.
+- Decision: activate the ordered SKIMS, Olipop, Poppi, AG1, Huel, Liquid Death,
+  and Nike universe only through repeated `build --hero-priority-brand` options.
+  A launch build considers eligible brands inside that universe, ranks them by
+  qualified-broadcast denominator, uses the supplied order for equal
+  denominators, and uses the multi-brand fallback when none qualifies. A normal
+  product build without the option still considers every eligible competitor.
+- Reason: the prior global sort allowed a higher-volume unlisted brand to power
+  the launch hero. The approved plan does not define a separate subjective
+  finding-strength score, so the largest qualified denominator is the strongest
+  evidence without inventing a marketing heuristic.
+- Impact: the visible hero and freeze manifest now bind the selected brand,
+  numerator, denominator, exact date window, observed days, and coverage label.
+  Freeze creation rejects hero HTML from a different census, and `verify`
+  rejects a modified hero-selection contract or hero HTML even when its stored
+  hash is also rewritten. A pre-change freeze without this contract must be
+  rebuilt before it can pass verification.
+- Status: complete.

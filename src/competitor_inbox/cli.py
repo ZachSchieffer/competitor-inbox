@@ -27,6 +27,8 @@ from .config import (
 from .coverage import coverage_markdown
 from .dashboard import (
     generate_dashboard,
+    hero_selection,
+    render_hero,
     render_hero_pngs,
     write_freeze_manifest,
     write_hero_candidates,
@@ -181,6 +183,7 @@ def _render_real(
     result: Any,
     *,
     render_screenshots: bool = False,
+    hero_priority_brands: Sequence[str] = (),
 ) -> dict[str, object]:
     store = MasterStore(config.data_root)
     records = dashboard_records(store.load())
@@ -194,6 +197,8 @@ def _render_real(
         "mailbox_or_label": config.source.label or config.source.mailbox,
         "qualified_scope": "broadcast",
     }
+    if hero_priority_brands:
+        summary["metadata"]["hero_priority_brands"] = list(hero_priority_brands)
     _bind_coverage_integrity(summary, result)
     verify_cross_foot(summary)
     hero_paths = write_hero_candidates(summary, store.root / "outputs" / "heroes")
@@ -498,6 +503,9 @@ def command_build(args: argparse.Namespace) -> int:
                     config,
                     analyzed,
                     render_screenshots=bool(getattr(args, "render_heroes", False)),
+                    hero_priority_brands=tuple(
+                        getattr(args, "hero_priority_brand", ()) or ()
+                    ),
                 )
             except Exception:
                 _restore_output_package(store.root, snapshot)
@@ -538,6 +546,22 @@ def _static_html_checks(
         checks[f"{prefix}_prototype_stamp"] = DEMO_STAMP in text
     if require_freshness:
         checks[f"{prefix}_freshness_badge"] = 'class="freshness"' in text
+
+
+def _heroes_match_census(heroes: Sequence[Path], summary: dict[str, Any]) -> bool:
+    expected = {
+        "hero-brand.html": render_hero(summary, "brand"),
+        "hero-portfolio.html": render_hero(summary, "portfolio"),
+    }
+    if {path.name for path in heroes} != set(expected):
+        return False
+    try:
+        return all(
+            read_bytes_no_follow(path).decode("utf-8") == expected[path.name]
+            for path in heroes
+        )
+    except (OSError, UnicodeError, UnsafeDataRootError):
+        return False
 
 
 def _verify_demo_package(store: MasterStore) -> dict[str, Any]:
@@ -600,6 +624,7 @@ def _verify_demo_package(store: MasterStore) -> dict[str, Any]:
             prefix=f"hero_{index}",
             require_stamp=True,
         )
+    checks["freeze_hero_census_binding"] = _heroes_match_census(heroes, summary)
 
     freeze = json.loads(read_bytes_no_follow(freeze_path))
     census_bytes = json.dumps(
@@ -613,6 +638,9 @@ def _verify_demo_package(store: MasterStore) -> dict[str, Any]:
         and freeze.get("stamp") == DEMO_STAMP
     )
     checks["freeze_message_count"] = freeze.get("qualified_broadcasts") == DEMO_TOTAL
+    checks["freeze_hero_selection"] = (
+        freeze.get("hero_selection") == hero_selection(summary)
+    )
     checks["freeze_census_hash"] = freeze.get("census_sha256") == hashlib.sha256(census_bytes).hexdigest()
     checks["freeze_dashboard_hash"] = freeze.get("dashboard", {}).get("sha256") == _sha256(dashboard_path)
     frozen_heroes = list(freeze.get("hero_html", []))
@@ -664,6 +692,7 @@ def _verify_production_package(store: MasterStore) -> dict[str, Any]:
         require_stamp=False,
         require_freshness=True,
     )
+    checks["freeze_hero_census_binding"] = _heroes_match_census(heroes, census)
 
     census_bytes = json.dumps(
         census,
@@ -724,6 +753,9 @@ def _verify_production_package(store: MasterStore) -> dict[str, Any]:
         "first": census.get("metadata", {}).get("first_observed", ""),
         "last": census.get("metadata", {}).get("last_observed", ""),
     }
+    checks["freeze_hero_selection"] = (
+        freeze.get("hero_selection") == hero_selection(census)
+    )
     return checks
 
 
@@ -835,6 +867,16 @@ def build_parser() -> argparse.ArgumentParser:
                 "--render-heroes",
                 action="store_true",
                 help="also render 1080x1350 PNGs; requires a local Chromium-family browser",
+            )
+            child.add_argument(
+                "--hero-priority-brand",
+                action="append",
+                default=[],
+                metavar="BRAND",
+                help=(
+                    "restrict the single-brand launch hero to this brand; repeat in "
+                    "the approved tie-break order"
+                ),
             )
 
     schedule = subparsers.add_parser("schedule")

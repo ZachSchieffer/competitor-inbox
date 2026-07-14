@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import plistlib
 import stat
@@ -265,6 +266,29 @@ def test_production_verify_binds_complete_output_generation(tmp_path: Path) -> N
     checks = cli_module._verify_production_package(store)
     assert checks
     assert all(value is True for value in checks.values())
+
+    freeze_path = store.root / "outputs" / "freeze-manifest.json"
+    freeze = json.loads(freeze_path.read_text())
+    original_freeze = deepcopy(freeze)
+    freeze["hero_selection"]["numerator"] += 1
+    atomic_write_json(freeze_path, freeze)
+    tampered_checks = cli_module._verify_production_package(store)
+    assert tampered_checks["freeze_hero_selection"] is False
+    atomic_write_json(freeze_path, original_freeze)
+
+    hero_path = store.root / "outputs" / "heroes" / "hero-brand.html"
+    original_hero = hero_path.read_bytes()
+    atomic_write_bytes(hero_path, original_hero + b"\n")
+    paired_tamper = deepcopy(original_freeze)
+    for row in paired_tamper["hero_html"]:
+        if Path(row["path"]).name == hero_path.name:
+            row["sha256"] = hashlib.sha256(hero_path.read_bytes()).hexdigest()
+    atomic_write_json(freeze_path, paired_tamper)
+    paired_checks = cli_module._verify_production_package(store)
+    assert paired_checks["freeze_hero_hashes"] is True
+    assert paired_checks["freeze_hero_census_binding"] is False
+    atomic_write_bytes(hero_path, original_hero)
+    atomic_write_json(freeze_path, original_freeze)
 
     changed = deepcopy(summary)
     changed["broadcast_count"] += 1

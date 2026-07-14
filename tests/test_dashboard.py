@@ -146,6 +146,153 @@ def test_brand_hero_uses_only_brand_specific_counts_and_dates(tmp_path: Path) ->
     assert "2026-07-14</strong>365 observed days" not in brand_document
 
 
+def test_launch_priority_profile_restricts_pool_then_uses_volume_and_order(
+    tmp_path: Path,
+) -> None:
+    summary = demo_summary()
+    priority = ["SKIMS", "Olipop", "Poppi", "AG1", "Huel", "Liquid Death", "Nike"]
+    summary["metadata"]["hero_priority_brands"] = priority
+    unlisted, skims, poppi = summary["brands"][:3]
+    unlisted["brand"] = "Unlisted Giant"
+    unlisted["qualified_broadcasts"] = 999
+    unlisted["hook_eligible"] = True
+    skims.update(
+        {
+            "brand": "SKIMS",
+            "qualified_broadcasts": 80,
+            "observed_days": 120,
+            "first_observed": "2026-01-01",
+            "last_observed": "2026-04-30",
+            "source_completeness": "complete",
+            "hook_eligible": True,
+            "quadrants": {
+                "Evergreen content": 30,
+                "Everyday promotion": 30,
+                "Seasonal promotion": 15,
+                "Seasonal content": 5,
+            },
+        }
+    )
+    poppi.update(
+        {
+            "brand": "Poppi",
+            "qualified_broadcasts": 90,
+            "observed_days": 121,
+            "first_observed": "2026-02-01",
+            "last_observed": "2026-06-01",
+            "source_completeness": "complete",
+            "hook_eligible": True,
+            "quadrants": {
+                "Evergreen content": 37,
+                "Everyday promotion": 33,
+                "Seasonal promotion": 15,
+                "Seasonal content": 5,
+            },
+        }
+    )
+
+    poppi_document = write_hero_candidates(summary, tmp_path / "volume")[0].read_text(
+        encoding="utf-8"
+    )
+    assert "Poppi sent 90 broadcasts in 121 observed days" in poppi_document
+    assert "37 of 90 were evergreen content" in poppi_document
+    assert "2026-02-01 to 2026-06-01" in poppi_document
+    assert "Complete source range" in poppi_document
+    assert "Unlisted Giant sent" not in poppi_document
+
+    skims["qualified_broadcasts"] = 90
+    skims["quadrants"] = {
+        "Evergreen content": 40,
+        "Everyday promotion": 30,
+        "Seasonal promotion": 15,
+        "Seasonal content": 5,
+    }
+    tie_document = write_hero_candidates(summary, tmp_path / "tie")[0].read_text(
+        encoding="utf-8"
+    )
+    assert "SKIMS sent 90 broadcasts" in tie_document
+
+    skims["hook_eligible"] = False
+    poppi["hook_eligible"] = False
+    fallback_document = write_hero_candidates(summary, tmp_path / "fallback")[0].read_text(
+        encoding="utf-8"
+    )
+    assert 'data-census-scope="portfolio-dashboard"' in fallback_document
+    assert "Unlisted Giant sent" not in fallback_document
+
+    summary["metadata"].pop("hero_priority_brands")
+    generic_document = write_hero_candidates(summary, tmp_path / "generic")[0].read_text(
+        encoding="utf-8"
+    )
+    assert "Unlisted Giant sent 999 broadcasts" in generic_document
+
+
+def test_freeze_manifest_binds_the_visible_launch_hook(tmp_path: Path) -> None:
+    summary = demo_summary()
+    summary["metadata"]["hero_priority_brands"] = ["Poppi", "SKIMS"]
+    brand = summary["brands"][0]
+    brand.update(
+        {
+            "brand": "Poppi",
+            "qualified_broadcasts": 90,
+            "observed_days": 121,
+            "first_observed": "2026-02-01",
+            "last_observed": "2026-06-01",
+            "source_completeness": "complete",
+            "hook_eligible": True,
+            "quadrants": {
+                "Evergreen content": 37,
+                "Everyday promotion": 33,
+                "Seasonal promotion": 15,
+                "Seasonal content": 5,
+            },
+        }
+    )
+    for row in summary["brands"][1:]:
+        row["hook_eligible"] = False
+    dashboard = generate_dashboard(summary, tmp_path / "dashboard.html")
+    heroes = write_hero_candidates(summary, tmp_path / "heroes")
+    manifest_path = write_freeze_manifest(
+        summary,
+        dashboard,
+        heroes,
+        tmp_path / "freeze.json",
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["hero_selection"] == {
+        "brand": "Poppi",
+        "coverage_label": "Complete source range",
+        "date_end": "2026-06-01",
+        "date_start": "2026-02-01",
+        "denominator": 90,
+        "descriptor": "evergreen content",
+        "numerator": 37,
+        "observed_days": 121,
+        "selection_basis": "largest qualified-broadcast denominator",
+        "source_completeness": "complete",
+        "type": "priority_brand",
+    }
+
+
+def test_freeze_refuses_hero_html_that_does_not_match_its_census(tmp_path: Path) -> None:
+    summary = demo_summary()
+    dashboard = generate_dashboard(summary, tmp_path / "dashboard.html")
+    heroes = write_hero_candidates(summary, tmp_path / "heroes")
+    heroes[0].write_text(
+        heroes[0].read_text(encoding="utf-8") + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HeroRenderError, match="does not match the census"):
+        write_freeze_manifest(
+            summary,
+            dashboard,
+            heroes,
+            tmp_path / "freeze.json",
+        )
+
+
 def test_fallback_heroes_are_distinct_and_show_curated_export_limit(tmp_path: Path) -> None:
     summary = demo_summary()
     summary["metadata"]["source_completeness"] = "curated_export"

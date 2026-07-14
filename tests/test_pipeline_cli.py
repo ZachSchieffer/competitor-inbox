@@ -10,7 +10,7 @@ import pytest
 
 import competitor_inbox.pipeline as pipeline_module
 from competitor_inbox.aggregate import aggregate_records
-from competitor_inbox.cli import _bind_coverage_integrity, main
+from competitor_inbox.cli import _bind_coverage_integrity, build_parser, main
 from competitor_inbox.config import AppConfig, SourceConfig, load_config, save_config
 from competitor_inbox.coverage import build_coverage_table, evaluate_early_data_gate
 from competitor_inbox.dashboard import generate_dashboard
@@ -30,6 +30,22 @@ from competitor_inbox.store import MasterStore
 
 
 NOW = datetime(2026, 7, 14, 16, 0, tzinfo=timezone.utc)
+
+
+def test_build_parser_preserves_ordered_launch_hero_brand_universe() -> None:
+    args = build_parser().parse_args(
+        [
+            "build",
+            "--hero-priority-brand",
+            "SKIMS",
+            "--hero-priority-brand",
+            "Olipop",
+            "--hero-priority-brand",
+            "Poppi",
+        ]
+    )
+
+    assert args.hero_priority_brand == ["SKIMS", "Olipop", "Poppi"]
 
 
 def _write_mbox(path: Path, count: int = 300) -> None:
