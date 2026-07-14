@@ -714,3 +714,35 @@ evidence from local and automated runs can be compared directly.
   dashboard, hero images, and copy input now share the same 3,843-message
   denominator and 3,754/88/1 scope split.
 - Status: complete; the candidate audit now rejects any future ledger drift.
+
+## 2026-07-14T18:55:41Z: Inline delivery identifiers require a patch release
+
+- Authority: absolute recipient-data isolation and zero-distribution rules.
+- Decision: redact an inline order, shipment, or package identifier only when
+  delivery-status language confirms the surrounding text is transactional.
+  Preserve the surrounding subject copy and apply the same detector at every
+  persistence and export assertion.
+- Reason: a final visual audit caught a recipient-specific delivery identifier
+  that the earlier line-oriented label rule did not cover. The narrow context
+  gate avoids treating ordinary quantities or promotion codes as private IDs.
+- Impact: synthetic coverage includes compact, separated, and punctuated IDs,
+  modified delivery-status phrases, idempotence, detector parity, and negative
+  marketing-copy cases. The package version advances to `1.0.1`; the record
+  schema remains `1.0.0` because no field changed.
+- Status: implementation and public regression coverage complete. Production
+  outputs must be re-sanitized, rebuilt, and independently rechecked before
+  launch staging resumes.
+
+## 2026-07-14T19:08:32Z: Launch images must remain readable in the feed
+
+- Authority: Checkpoint B visual-readiness requirement.
+- Decision: size important hero support copy at 40 source pixels, which renders
+  at 14.44 pixels when a 1080-pixel image is shown at a 390-pixel feed width.
+  Remove explanatory microcopy that cannot meet that contract.
+- Reason: the first final visual audit found that both technically valid hero
+  images became too small to read in a mobile LinkedIn feed.
+- Impact: the revised heroes retain the frozen counts, denominator, date
+  window, update cadence, coverage label, and 4 package callouts. Synthetic
+  tests enforce the feed-scale calculation and required visible fields.
+- Status: implementation and focused rendering tests complete. Final images
+  still require a fresh production render and independent visual review.

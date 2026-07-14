@@ -141,6 +141,50 @@ def test_hero_candidates_are_1080_by_1350_screenshot_ready(tmp_path: Path) -> No
     )
 
 
+def test_hero_support_copy_is_legible_at_linkedin_feed_scale(tmp_path: Path) -> None:
+    summary = demo_summary()
+    dashboard_path, poster_path = write_hero_candidates(summary, tmp_path)
+    dashboard = dashboard_path.read_text(encoding="utf-8")
+    poster = poster_path.read_text(encoding="utf-8")
+
+    feed_size = (
+        dashboard_module._HERO_FEED_COPY_SOURCE_PX
+        * dashboard_module._HERO_FEED_PREVIEW_WIDTH
+        / dashboard_module._HERO_WIDTH
+    )
+    assert feed_size >= dashboard_module._HERO_MIN_FEED_COPY_PX
+    assert (
+        f"font-size:{dashboard_module._HERO_FEED_COPY_SOURCE_PX}px"
+        in dashboard
+    )
+
+    for document in (dashboard, poster):
+        assert 'class="hero-sub hero-support"' in document
+        assert re.search(
+            r'<strong class="hero-support">\d{4}-\d{2}-\d{2} to '
+            r'\d{4}-\d{2}-\d{2}</strong>',
+            document,
+        )
+        assert re.search(
+            r'<span class="hero-support">\d{3} observed days</span>',
+            document,
+        )
+        assert document.count('<span class="hero-support">') >= 5
+
+    assert dashboard.count('<div class="package-item">') == 4
+    for callout in (
+        "Competitor comparison",
+        "Evergreen + promo mix",
+        "Seasonal planner",
+        "Messaging library + action plan",
+    ):
+        assert f'<strong class="hero-support">{callout}</strong>' in dashboard
+
+    # Explanatory microcopy was removed instead of leaving unreadable labels.
+    assert "Cadence, mix, and posture by brand" not in dashboard
+    assert "Catches late-arriving mail" not in dashboard
+
+
 def test_brand_hero_uses_only_brand_specific_counts_and_dates(tmp_path: Path) -> None:
     summary = demo_summary()
     brand = summary["brands"][0]
@@ -149,7 +193,7 @@ def test_brand_hero_uses_only_brand_specific_counts_and_dates(tmp_path: Path) ->
     assert 'data-census-scope="brand"' in brand_document
     assert f"{brand['quadrants']['Evergreen content']} of {brand['qualified_broadcasts']}" in brand_document
     for name, count in brand["quadrants"].items():
-        assert f"<b>{count}</b><span>{name} |" in brand_document
+        assert f'<b>{count}</b><span class="hero-support">{name} |' in brand_document
     assert f"{brand['first_observed']} to {brand['last_observed']}" in brand_document
     assert f"{brand['observed_days']} observed days" in brand_document
     assert "580 of 1,260" not in brand_document
@@ -347,7 +391,7 @@ def test_fallback_hero_separates_source_census_from_broadcast_denominator(tmp_pa
 
     assert "1,271 emails from 11 brands" in poster
     assert "1,260 qualified broadcasts after 9 lifecycle and 2 uncertain messages" in poster
-    assert "580</b><span>Evergreen content | 46.0%" in poster
+    assert '580</b><span class="hero-support">Evergreen content | 46.0%' in poster
 
 
 def test_curated_dashboard_does_not_promote_a_capped_volume_leader() -> None:
