@@ -122,6 +122,126 @@ def test_sanitizer_and_parser_remove_identifiers_and_classify_scope() -> None:
     assert "reader@recipient.example" not in sanitize_text("reader@recipient.example")
 
 
+def test_scope_uses_campaign_lead_instead_of_footer_boilerplate() -> None:
+    broadcast = parse_envelope(
+        envelope(
+            raw_message(
+                subject="The weekly product edit",
+                body=(
+                    "Three current favorites.\n"
+                    + "x" * 900
+                    + "\nRewards balance, referral reward, and shipping update terms."
+                ),
+            ),
+            uid="scope-footer",
+        )
+    )
+    recruiting = parse_envelope(
+        envelope(
+            raw_message(
+                subject="Welcome to the ambassador program",
+                body="Apply to join our creator community.",
+            ),
+            uid="scope-recruiting",
+        )
+    )
+
+    assert broadcast.scope == MessageScope.BROADCAST.value
+    assert recruiting.scope == MessageScope.BROADCAST.value
+
+
+def test_scope_recognizes_later_welcome_flow_evidence() -> None:
+    record = parse_envelope(
+        envelope(
+            raw_message(
+                subject="A guide for your first week",
+                body="Subscriber code details for your first order discount.",
+            ),
+            uid="scope-welcome-series",
+        )
+    )
+
+    assert record.scope == MessageScope.LIFECYCLE.value
+    assert record.scope_reason == "lifecycle:welcome"
+
+
+def test_attached_rfc822_is_not_treated_as_the_outer_campaign() -> None:
+    attached = EmailMessage()
+    attached["From"] = "Other <news@other.example>"
+    attached["To"] = "Reader <reader@recipient.example>"
+    attached["Date"] = "Tue, 14 Jul 2026 08:00:00 +0000"
+    attached["Subject"] = "Your order shipped"
+    attached.set_content("Tracking number and delivery details")
+
+    outer = EmailMessage()
+    outer["From"] = "Northstar <news@northstar.example>"
+    outer["To"] = "Reader <reader@recipient.example>"
+    outer["Date"] = "Tue, 14 Jul 2026 08:00:00 +0000"
+    outer["Subject"] = "Summer sale"
+    outer["List-ID"] = "Northstar News <news.northstar.example>"
+    outer["List-Unsubscribe"] = "<https://northstar.example/u?token=private-value>"
+    outer.set_content("The outer campaign is still the source message.")
+    outer.add_attachment(attached)
+
+    record = parse_envelope(envelope(outer.as_bytes(), uid="attached-rfc822"))
+
+    assert record.brand == "Northstar"
+    assert record.subject == "Summer sale"
+    assert record.scope == MessageScope.UNCERTAIN.value
+    assert record.scope_reason == "embedded_message_ambiguous"
+    assert "embedded_message_not_unwrapped" in record.parse_errors
+    assert "Tracking number" not in record.visible_text
+
+
+def test_explicit_nonbulk_forward_unwraps_one_rfc822_message() -> None:
+    forwarded = EmailMessage()
+    forwarded["From"] = "Northstar <news@northstar.example>"
+    forwarded["To"] = "Reader <reader@recipient.example>"
+    forwarded["Date"] = "Tue, 14 Jul 2026 08:00:00 +0000"
+    forwarded["Subject"] = "The weekly product edit"
+    forwarded["List-ID"] = "Northstar News <news.northstar.example>"
+    forwarded.set_content("Three current favorites.")
+
+    wrapper = EmailMessage()
+    wrapper["From"] = "Archive <archive@recipient.example>"
+    wrapper["To"] = "Reader <reader@recipient.example>"
+    wrapper["Date"] = "Tue, 14 Jul 2026 08:00:00 +0000"
+    wrapper["Subject"] = "Fwd: The weekly product edit"
+    wrapper.set_content("Forwarded message attached.")
+    wrapper.add_attachment(forwarded)
+
+    record = parse_envelope(envelope(wrapper.as_bytes(), uid="explicit-forward"))
+
+    assert record.brand == "Northstar"
+    assert record.subject == "The weekly product edit"
+    assert record.scope == MessageScope.BROADCAST.value
+    assert "forward_unwrapped" in record.parse_errors
+
+
+def test_named_inline_text_attachment_is_not_persisted_as_visible_copy() -> None:
+    message = EmailMessage()
+    message["From"] = "Northstar <news@northstar.example>"
+    message["To"] = "Reader <reader@recipient.example>"
+    message["Date"] = "Tue, 14 Jul 2026 08:00:00 +0000"
+    message["Subject"] = "The weekly product edit"
+    message["Message-ID"] = "<named-inline@northstar.example>"
+    message["List-ID"] = "Northstar News <news.northstar.example>"
+    message.set_content("Three current favorites.")
+    message.add_attachment(
+        "Recipient: Priya Shah\nOrder number: PRIVATE 42",
+        subtype="plain",
+        filename="order-export.txt",
+        disposition="inline",
+    )
+
+    record = parse_envelope(envelope(message.as_bytes(), uid="named-inline"))
+
+    assert record.visible_text == "Three current favorites."
+    assert "Priya" not in record.visible_text
+    assert "PRIVATE" not in record.visible_text
+    assert contains_direct_identifier(record.visible_text) is False
+
+
 def test_source_completeness_is_strict_propagated_and_persisted(tmp_path: Path) -> None:
     complete_envelope = envelope(raw_message(), uid="provenance-complete")
     curated_envelope = replace(

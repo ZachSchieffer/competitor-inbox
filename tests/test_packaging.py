@@ -243,16 +243,50 @@ def test_update_failure_restores_exact_prior_output_package(
     assert run_state["dashboard_replaced"] is False
 
 
-def test_production_verify_binds_complete_output_generation(tmp_path: Path) -> None:
+def test_production_verify_binds_complete_output_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = MasterStore(tmp_path / "private")
     summary = demo_summary()
     summary["metadata"]["illustrative_prototype"] = False
+    monkeypatch.setattr(cli_module, "_git_state", lambda: ("a" * 40, False))
     dashboard = generate_dashboard(summary, store.root / "outputs" / "dashboard.html")
     heroes = write_hero_candidates(summary, store.root / "outputs" / "heroes")
     atomic_write_json(store.root / "outputs" / "census.json", summary)
+    quadrants = {
+        row["name"]: row["count"] for row in summary["quadrants"]
+    }
     atomic_write_json(
         store.root / "outputs" / "coverage.json",
-        {"early_gate": {"passed": True}},
+        {
+            "total": {
+                **summary["pipeline"],
+                "qualified_broadcasts": summary["scope_counts"]["broadcast"],
+                "lifecycle": summary["scope_counts"]["lifecycle"],
+                "uncertain": summary["scope_counts"]["uncertain"],
+                "first_observed_date": summary["metadata"]["first_observed"],
+                "last_observed_date": summary["metadata"]["last_observed"],
+                "observed_days": summary["metadata"]["observed_days"],
+                "evergreen_content": quadrants["Evergreen content"],
+                "everyday_promotion": quadrants["Everyday promotion"],
+                "seasonal_promotion": quadrants["Seasonal promotion"],
+                "seasonal_content": quadrants["Seasonal content"],
+            },
+            "quadrants": [
+                {
+                    "quadrant": name,
+                    "count": count,
+                    "total_denominator": summary["broadcast_count"],
+                }
+                for name, count in quadrants.items()
+            ],
+            "early_gate": {
+                "passed": True,
+                "total_qualified_broadcasts": summary["broadcast_count"],
+                "brand_count": summary["brand_count"],
+            },
+        },
     )
     write_freeze_manifest(
         summary,
@@ -274,6 +308,39 @@ def test_production_verify_binds_complete_output_generation(tmp_path: Path) -> N
     atomic_write_json(freeze_path, freeze)
     tampered_checks = cli_module._verify_production_package(store)
     assert tampered_checks["freeze_hero_selection"] is False
+    atomic_write_json(freeze_path, original_freeze)
+
+    dirty_freeze = deepcopy(original_freeze)
+    dirty_freeze["git_sha"] = ""
+    dirty_freeze["git_dirty"] = True
+    atomic_write_json(freeze_path, dirty_freeze)
+    dirty_checks = cli_module._verify_production_package(store)
+    assert dirty_checks["freeze_git_sha"] is False
+    assert dirty_checks["freeze_git_clean"] is False
+    assert dirty_checks["freeze_git_matches_source"] is False
+    atomic_write_json(freeze_path, original_freeze)
+
+    coverage_path = store.root / "outputs" / "coverage.json"
+    original_coverage = json.loads(coverage_path.read_text())
+    stale_coverage = deepcopy(original_coverage)
+    stale_coverage["total"]["qualified_broadcasts"] -= 1
+    atomic_write_json(coverage_path, stale_coverage)
+    stale_checks = cli_module._verify_production_package(store)
+    assert stale_checks["early_data_gate"] is True
+    assert stale_checks["coverage_census_binding"] is False
+    atomic_write_json(coverage_path, original_coverage)
+
+    monkeypatch.setattr(cli_module, "_git_state", lambda: ("b" * 40, False))
+    source_mismatch = cli_module._verify_production_package(store)
+    assert source_mismatch["freeze_git_matches_source"] is False
+    monkeypatch.setattr(cli_module, "_git_state", lambda: ("a" * 40, False))
+
+    stale_metrics = deepcopy(original_freeze)
+    stale_metrics["metrics"]["offer_share"] += 0.1
+    atomic_write_json(freeze_path, stale_metrics)
+    metric_checks = cli_module._verify_production_package(store)
+    assert metric_checks["freeze_quadrants"] is True
+    assert metric_checks["freeze_metrics_binding"] is False
     atomic_write_json(freeze_path, original_freeze)
 
     hero_path = store.root / "outputs" / "heroes" / "hero-brand.html"

@@ -132,7 +132,10 @@ def status(config: AppConfig) -> dict[str, Any]:
         + int(state.get("update_errors") or 0),
         "incremental_overlap_days": INCREMENTAL_OVERLAP_DAYS,
         "process_lock": "one complete update at a time",
-        "failure_behavior": "atomic replacement; prior dashboard retained",
+        "failure_behavior": (
+            "files replace individually; caught failures restore the prior output package; "
+            "prior dashboard retained"
+        ),
         "note": MAC_ON_DEPENDENCY,
     }
 

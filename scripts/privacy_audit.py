@@ -3,8 +3,8 @@
 
 The audit scans the live worktree, Git-untracked files, the staged index, and
 every blob in the Git object database, including unreachable objects. Findings
-never include matched values.
-Files ending in ``.example`` are reported separately as synthetic templates.
+never include matched values. Example filenames receive no trust exemption;
+only addresses in IANA-reserved test domains are treated as fixtures.
 """
 
 from __future__ import annotations
@@ -25,6 +25,22 @@ EMAIL_RE = re.compile(
     rb"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b", re.IGNORECASE
 )
 HOME_PATH_RE = re.compile(rb"/(?:Users|home)/[A-Za-z0-9._-]+/")
+SHORT_TRACKING_FRAGMENT_RE = re.compile(
+    rb"(?i)(?:"
+    rb"(?<![A-Z0-9_])(?:r|k|m)\s*"
+    rb"(?:=3d|%(?:25)*3d|&#(?:0*61|x0*3d);)\s*[^\s&#<>'\"]+"
+    rb"|(?:\?|&(?:amp;)?|;|%(?:25)*26)\s*(?:r|k|m)\s*=\s*"
+    rb"[^\s&#<>'\"]{4,}"
+    rb"|(?<![A-Z0-9_])(?:r|k|m)\s*=\s*[^\s&#<>'\"]+"
+    rb"(?:\s*(?:&(?:amp;)?|;|%(?:25)*26)\s*(?:r|k|m)\s*=\s*"
+    rb"[^\s&#<>'\"]+)+"
+    rb")"
+)
+STANDALONE_SHORT_TRACKING_RE = re.compile(
+    rb"(?<![A-Z0-9_?&;])(?:r|k|m)\s*=\s*"
+    rb"(?P<value>[A-Z0-9._~-]{12,})(?![A-Z0-9_.-])",
+    re.IGNORECASE,
+)
 
 CONTENT_RULES: tuple[tuple[str, re.Pattern[bytes]], ...] = (
     ("email_address", EMAIL_RE),
@@ -51,6 +67,11 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[bytes]], ...] = (
         "cookie_header",
         re.compile(rb"(?i)(?:^|\n)\s*(?:cookie|set-cookie)\s*:\s*[^\r\n]{12,}"),
     ),
+    ("recipient_tracking_fragment", SHORT_TRACKING_FRAGMENT_RE),
+    (
+        "git_lfs_pointer",
+        re.compile(rb"(?im)^version https://git-lfs\.github\.com/spec/v1\s*$"),
+    ),
 )
 
 SENSITIVE_EXTENSIONS = {
@@ -75,18 +96,6 @@ REVIEWABLE_ASSET_EXTENSIONS = {
     ".tiff",
     ".webp",
 }
-
-GENERATED_DIRECTORIES = {
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".venv",
-    "__pycache__",
-    "build",
-    "dist",
-    "venv",
-}
-
 
 @dataclass(frozen=True)
 class Finding:
@@ -133,8 +142,6 @@ def _is_reserved_test_email(value: bytes) -> bool:
 
 
 def _finding_synthetic_category(path: str, finding: Finding) -> str | None:
-    if _is_synthetic_example(path):
-        return "example_template"
     if finding.rule_id == "synthetic_email_address":
         return "reserved_fixture"
     return None
@@ -176,6 +183,14 @@ def _looks_like_raw_mail(data: bytes) -> bool:
     return all(value in lowered for value in required) and has_address_header
 
 
+def _opaque_short_tracking_value(value: bytes) -> bool:
+    return (
+        len(value) >= 20
+        or any(48 <= character <= 57 or 65 <= character <= 90 for character in value)
+        or sum(value.count(separator) for separator in (b"-", b"_", b".", b"~")) >= 2
+    )
+
+
 def _scan_payload(
     *,
     data: bytes,
@@ -188,6 +203,38 @@ def _scan_payload(
     assets: list[Asset] = []
     safe_path = _safe_path(path)
     suffix = PurePosixPath(path).suffix.lower()
+
+    encoded_path = path.encode("utf-8", "surrogateescape")
+    for rule_id, pattern in (
+        ("email_address_in_path", EMAIL_RE),
+        ("absolute_home_path_in_path", HOME_PATH_RE),
+    ):
+        for match in pattern.finditer(encoded_path):
+            effective_rule = rule_id
+            if rule_id == "email_address_in_path" and _is_reserved_test_email(
+                match.group(0)
+            ):
+                effective_rule = "synthetic_email_address"
+            findings.append(
+                Finding(
+                    scope=scope,
+                    path=safe_path,
+                    rule_id=effective_rule,
+                    match_hash=_digest(match.group(0)),
+                    blob_oid=blob_oid,
+                )
+            )
+
+    if PurePosixPath(path).name == ".gitmodules":
+        findings.append(
+            Finding(
+                scope=scope,
+                path=safe_path,
+                rule_id="submodule_manifest",
+                match_hash=_digest(data),
+                blob_oid=blob_oid,
+            )
+        )
 
     if suffix in SENSITIVE_EXTENSIONS:
         findings.append(
@@ -227,6 +274,19 @@ def _scan_payload(
                 )
             )
 
+    for match in STANDALONE_SHORT_TRACKING_RE.finditer(data):
+        if not _opaque_short_tracking_value(match.group("value")):
+            continue
+        findings.append(
+            Finding(
+                scope=scope,
+                path=safe_path,
+                rule_id="recipient_tracking_fragment",
+                match_hash=_digest(match.group(0)),
+                blob_oid=blob_oid,
+            )
+        )
+
     if _looks_like_raw_mail(data):
         findings.append(
             Finding(
@@ -243,13 +303,16 @@ def _scan_payload(
 
 def _walk_worktree(repo: Path) -> Iterable[tuple[str, Path]]:
     for root, directories, filenames in os.walk(repo, followlinks=False):
-        directories[:] = sorted(
-            name
-            for name in directories
-            if name != ".git"
-            and name not in GENERATED_DIRECTORIES
-            and not name.endswith(".egg-info")
-        )
+        descend: list[str] = []
+        for name in sorted(directories):
+            if name == ".git":
+                continue
+            absolute = Path(root) / name
+            if absolute.is_symlink():
+                yield absolute.relative_to(repo).as_posix(), absolute
+            else:
+                descend.append(name)
+        directories[:] = descend
         for name in sorted(filenames):
             absolute = Path(root) / name
             relative = absolute.relative_to(repo).as_posix()
@@ -300,6 +363,55 @@ def _all_git_blobs(repo: Path) -> Iterable[tuple[str, str, str, bytes]]:
         yield scope, oid, path, data
 
 
+def _index_gitlinks(repo: Path) -> Iterable[tuple[str, str]]:
+    payload = _git(repo, ["ls-files", "--stage", "-z"], check=False)
+    for record in payload.split(b"\0"):
+        if not record or b"\t" not in record:
+            continue
+        metadata, path_bytes = record.split(b"\t", 1)
+        fields = metadata.split()
+        if len(fields) != 3 or fields[0] != b"160000":
+            continue
+        yield (
+            fields[1].decode("ascii", "replace"),
+            path_bytes.decode("utf-8", "surrogateescape"),
+        )
+
+
+def _all_gitlinks(repo: Path) -> Iterable[tuple[str, str, str, str]]:
+    """Yield gitlinks from every reachable and unreachable tree object."""
+
+    reachable = {
+        line.partition(b" ")[0].decode("ascii", "replace")
+        for line in _git(repo, ["rev-list", "--objects", "--all"]).splitlines()
+        if line
+    }
+    inventory = _git(
+        repo,
+        [
+            "cat-file",
+            "--batch-all-objects",
+            "--batch-check=%(objectname) %(objecttype)",
+        ],
+    )
+    for line in inventory.splitlines():
+        tree_bytes, _, type_bytes = line.partition(b" ")
+        if type_bytes.strip() != b"tree":
+            continue
+        tree_oid = tree_bytes.decode("ascii", "replace")
+        scope = "history" if tree_oid in reachable else "unreachable"
+        for record in _git(repo, ["ls-tree", "-z", tree_oid]).split(b"\0"):
+            if not record or b"\t" not in record:
+                continue
+            metadata, path_bytes = record.split(b"\t", 1)
+            fields = metadata.split()
+            if len(fields) != 3 or fields[0] != b"160000":
+                continue
+            path = path_bytes.decode("utf-8", "surrogateescape")
+            target_oid = fields[2].decode("ascii", "replace")
+            yield scope, tree_oid, path, target_oid
+
+
 def scan_repository(repo: Path, deny_pattern_file: Path | None = None) -> dict[str, object]:
     repo = repo.resolve()
     if _git(repo, ["rev-parse", "--is-inside-work-tree"], check=False).strip() != b"true":
@@ -314,6 +426,7 @@ def scan_repository(repo: Path, deny_pattern_file: Path | None = None) -> dict[s
         "staged": 0,
         "history": 0,
         "unreachable": 0,
+        "gitlinks": 0,
     }
 
     for relative, absolute in _walk_worktree(repo):
@@ -325,9 +438,7 @@ def scan_repository(repo: Path, deny_pattern_file: Path | None = None) -> dict[s
                 rule_id="symlink_not_allowed",
                 match_hash=_digest(os.readlink(absolute).encode("utf-8", "surrogateescape")),
             )
-            all_findings.append(
-                (finding, "example_template" if _is_synthetic_example(relative) else None)
-            )
+            all_findings.append((finding, None))
             continue
         try:
             data = absolute.read_bytes()
@@ -338,9 +449,7 @@ def scan_repository(repo: Path, deny_pattern_file: Path | None = None) -> dict[s
                 rule_id="unreadable_file",
                 match_hash=_digest(type(error).__name__.encode()),
             )
-            all_findings.append(
-                (finding, "example_template" if _is_synthetic_example(relative) else None)
-            )
+            all_findings.append((finding, None))
             continue
         found, found_assets = _scan_payload(
             data=data,
@@ -397,6 +506,17 @@ def scan_repository(repo: Path, deny_pattern_file: Path | None = None) -> dict[s
         )
         assets.extend(found_assets)
 
+    for target_oid, relative in _index_gitlinks(repo):
+        scanned_counts["gitlinks"] += 1
+        finding = Finding(
+            scope="index",
+            path=_safe_path(relative),
+            rule_id="submodule_gitlink",
+            match_hash=_digest(f"{relative}\0{target_oid}".encode("utf-8", "surrogateescape")),
+            blob_oid=None,
+        )
+        all_findings.append((finding, None))
+
     for scope, oid, relative, data in _all_git_blobs(repo):
         scanned_counts[scope] += 1
         found, found_assets = _scan_payload(
@@ -410,6 +530,17 @@ def scan_repository(repo: Path, deny_pattern_file: Path | None = None) -> dict[s
             (item, _finding_synthetic_category(relative, item)) for item in found
         )
         assets.extend(found_assets)
+
+    for scope, tree_oid, relative, target_oid in _all_gitlinks(repo):
+        scanned_counts["gitlinks"] += 1
+        finding = Finding(
+            scope=scope,
+            path=_safe_path(f"<tree:{tree_oid[:12]}>/{relative}"),
+            rule_id="submodule_gitlink",
+            match_hash=_digest(f"{relative}\0{target_oid}".encode("utf-8", "surrogateescape")),
+            blob_oid=tree_oid,
+        )
+        all_findings.append((finding, None))
 
     violations = [asdict(item) for item, category in all_findings if category is None]
     synthetic_example_findings = [
@@ -434,7 +565,7 @@ def scan_repository(repo: Path, deny_pattern_file: Path | None = None) -> dict[s
         "synthetic_example_findings": synthetic_example_findings,
         "reserved_fixture_findings": reserved_fixture_findings,
         "assets_for_manual_review": asset_rows,
-        "excluded_generated_directories": sorted(GENERATED_DIRECTORIES),
+        "generated_directories_scanned": True,
     }
 
 
@@ -480,10 +611,7 @@ def render_human(report: dict[str, object]) -> str:
             f"- scope={row['scope']} path={row['path']} sha256={row['sha256']} "
             f"size={row['size']} synthetic_example={row['synthetic_example']}"
         )
-    lines.append(
-        "Excluded generated dependency/cache directories: "
-        + ", ".join(report["excluded_generated_directories"])
-    )
+    lines.append("Generated directories and caches scanned: yes")
     return "\n".join(lines)
 
 

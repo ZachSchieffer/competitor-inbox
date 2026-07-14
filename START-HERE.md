@@ -173,9 +173,12 @@ Install the LaunchAgent after a successful manual update:
 
 The LaunchAgent runs at 7:00 AM local time and at load. Each run uses a 14-day
 overlap, and a process lock allows only 1 complete update at a time. Dashboard
-replacement is atomic across the dashboard, census, coverage, hero files, and
-freeze manifest. A failed update restores the prior generation and sends a
-non-sensitive macOS notification. Logs stay private under
+files use atomic replacement, and a caught update failure restores the prior
+dashboard, census, coverage, hero files, and freeze manifest. The job also
+sends a non-sensitive macOS notification. An abrupt shutdown between managed
+file replacements can leave an incomplete generation, so `verify` fails closed
+and the prior dashboard remains available as `dashboard.previous.html`. Run
+`build`, then `verify`, after the Mac restarts. Logs stay private under
 `~/competitor-inbox-data/logs/`.
 
 If you use a custom private config, keep the flag before the schedule action so
@@ -223,9 +226,11 @@ Run both checks from the repository root before any push:
 python3 scripts/privacy_audit.py --repo .
 ```
 
-The audit scans the working tree, untracked and staged files, every Git ref and
-blob, raw-mail formats, databases, secrets, home paths, production addresses,
-assets, releases, caches, LFS, and submodules.
+The local audit scans the working tree, untracked and staged files, local Git
+refs and objects (including unreachable objects), raw-mail formats, databases,
+secrets, home paths, production addresses, assets, caches, LFS pointers, and
+submodules. Before a release, fetch every remote ref and separately inventory
+GitHub Releases and Actions artifacts with the GitHub CLI.
 
 After `v1.0.0` exists, run the immutable-ref install test:
 

@@ -6,12 +6,15 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import webbrowser
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from typing import Any, Sequence
+from urllib.parse import unquote, urlparse
 
 from . import __version__
 from .aggregate import aggregate_records, verify_cross_foot
@@ -26,6 +29,7 @@ from .config import (
 )
 from .coverage import coverage_markdown
 from .dashboard import (
+    _freeze_metrics,
     generate_dashboard,
     hero_selection,
     render_hero,
@@ -93,25 +97,79 @@ def _print(value: object, *, as_json: bool = False) -> None:
         print(json.dumps(value, indent=2, sort_keys=True, default=str))
 
 
+def _installed_source_directory() -> Path | None:
+    """Return pip's local install source without assuming site-package layout."""
+
+    try:
+        raw = distribution("competitor-inbox").read_text("direct_url.json")
+    except (PackageNotFoundError, OSError):
+        return None
+    if not raw:
+        return None
+    try:
+        url = str(json.loads(raw).get("url") or "")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
+        return None
+    candidate = Path(unquote(parsed.path))
+    return candidate if candidate.is_dir() else None
+
+
 def _git_state() -> tuple[str, bool]:
-    repository = Path(__file__).resolve().parents[2]
-    revision = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repository,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if revision.returncode != 0:
-        return "", True
-    status = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=normal"],
-        cwd=repository,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return revision.stdout.strip(), status.returncode != 0 or bool(status.stdout.strip())
+    """Bind a freeze to the repository that supplied the installed package.
+
+    ``pip install .`` copies modules into site-packages, so walking upward from
+    ``__file__`` does not find the release clone. PEP 610's ``direct_url.json``
+    retains that local source directory for both regular and editable installs.
+    CWD and source parents remain safe fallbacks for direct source execution.
+    """
+
+    candidates = [
+        _installed_source_directory(),
+        Path.cwd(),
+        *Path(__file__).resolve().parents,
+    ]
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        resolved = candidate.resolve(strict=False)
+        if resolved in seen or not resolved.is_dir():
+            continue
+        seen.add(resolved)
+        root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=resolved,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if root.returncode != 0 or not root.stdout.strip():
+            continue
+        repository = Path(root.stdout.strip())
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if revision.returncode != 0:
+            continue
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal"],
+            cwd=repository,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return (
+            revision.stdout.strip(),
+            status.returncode != 0 or bool(status.stdout.strip()),
+        )
+    return "", True
 
 
 def _pipeline_counts(result: Any) -> dict[str, int]:
@@ -650,6 +708,87 @@ def _verify_demo_package(store: MasterStore) -> dict[str, Any]:
     return checks
 
 
+def _coverage_matches_census(
+    coverage: dict[str, Any],
+    census: dict[str, Any],
+) -> bool:
+    """Bind the source ledger to the same aggregate generation as the census."""
+
+    try:
+        total = coverage["total"]
+        pipeline = census["pipeline"]
+        scopes = census["scope_counts"]
+        metadata = census["metadata"]
+        early_gate = coverage["early_gate"]
+        census_gate = census["early_data_gate"]
+        if not all(
+            isinstance(value, dict)
+            for value in (total, pipeline, scopes, metadata, early_gate, census_gate)
+        ):
+            return False
+
+        expected = {
+            "raw_fetched": int(pipeline["raw_fetched"]),
+            "parse_failures": int(pipeline["parse_failures"]),
+            "parsed_input": int(pipeline["parsed_input"]),
+            "variants_collapsed": int(pipeline["variants_collapsed"]),
+            "distinct_messages": int(pipeline["distinct_messages"]),
+            "qualified_broadcasts": int(scopes["broadcast"]),
+            "lifecycle": int(scopes["lifecycle"]),
+            "uncertain": int(scopes["uncertain"]),
+        }
+        if any(int(total[key]) != value for key, value in expected.items()):
+            return False
+
+        if int(census["broadcast_count"]) != expected["qualified_broadcasts"]:
+            return False
+        if str(total["first_observed_date"]) != str(metadata["first_observed"]):
+            return False
+        if str(total["last_observed_date"]) != str(metadata["last_observed"]):
+            return False
+        if int(total["observed_days"]) != int(metadata["observed_days"]):
+            return False
+
+        census_quadrants = {
+            str(row["name"]): int(row["count"])
+            for row in census["quadrants"]
+            if isinstance(row, dict)
+        }
+        total_quadrants = {
+            "Evergreen content": int(total["evergreen_content"]),
+            "Everyday promotion": int(total["everyday_promotion"]),
+            "Seasonal promotion": int(total["seasonal_promotion"]),
+            "Seasonal content": int(total["seasonal_content"]),
+        }
+        if total_quadrants != census_quadrants:
+            return False
+
+        coverage_quadrants = {
+            str(row["quadrant"]): (
+                int(row["count"]),
+                int(row["total_denominator"]),
+            )
+            for row in coverage["quadrants"]
+            if isinstance(row, dict) and row.get("quadrant") != "Total"
+        }
+        expected_quadrants = {
+            name: (count, expected["qualified_broadcasts"])
+            for name, count in census_quadrants.items()
+        }
+        if coverage_quadrants != expected_quadrants:
+            return False
+
+        return (
+            early_gate.get("passed") is True
+            and census_gate.get("passed") is True
+            and int(early_gate["total_qualified_broadcasts"])
+            == expected["qualified_broadcasts"]
+            and int(early_gate["brand_count"]) == int(census["brand_count"])
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def _verify_production_package(store: MasterStore) -> dict[str, Any]:
     """Verify one frozen production output generation without mutating source data."""
 
@@ -684,6 +823,7 @@ def _verify_production_package(store: MasterStore) -> dict[str, Any]:
     else:
         checks["production_cross_foot"] = True
     checks["early_data_gate"] = coverage.get("early_gate", {}).get("passed") is True
+    checks["coverage_census_binding"] = _coverage_matches_census(coverage, census)
 
     _static_html_checks(
         checks,
@@ -749,12 +889,27 @@ def _verify_production_package(store: MasterStore) -> dict[str, Any]:
         == int(census.get("broadcast_count", 0))
     )
     checks["freeze_quadrants"] = frozen_quadrants == quadrants
+    checks["freeze_metrics_binding"] = freeze.get("metrics") == _freeze_metrics(census)
     checks["freeze_window"] = freeze.get("window") == {
         "first": census.get("metadata", {}).get("first_observed", ""),
         "last": census.get("metadata", {}).get("last_observed", ""),
     }
     checks["freeze_hero_selection"] = (
         freeze.get("hero_selection") == hero_selection(census)
+    )
+    checks["freeze_git_sha"] = bool(
+        re.fullmatch(
+            r"[0-9a-f]{40}",
+            str(freeze.get("git_sha") or ""),
+            re.IGNORECASE,
+        )
+    )
+    checks["freeze_git_clean"] = freeze.get("git_dirty") is False
+    current_git_sha, current_git_dirty = _git_state()
+    checks["freeze_git_matches_source"] = (
+        current_git_dirty is False
+        and bool(current_git_sha)
+        and freeze.get("git_sha") == current_git_sha
     )
     return checks
 

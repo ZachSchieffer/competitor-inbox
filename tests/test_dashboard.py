@@ -96,7 +96,8 @@ def test_untrusted_message_text_is_escaped() -> None:
     document = render_dashboard(aggregate_records([record]))
 
     assert "</script><img" not in document
-    assert "&lt;/script&gt;&lt;img" in document
+    assert "&lt;/script&gt;&lt;img" not in document
+    assert "onerror" not in document
     assert "<script" not in document.casefold()
 
 
@@ -395,10 +396,11 @@ def test_seasonal_planner_uses_only_brands_passing_the_330_day_gate() -> None:
             "canonical_received_at": f"{received}T08:00:00+00:00",
             "subject": subject,
             "preheader": "Planning details",
-            "visible_text": "A practical planning note.",
-            "scope": "broadcast",
-            "variant_count": 1,
-        }
+                "visible_text": "A practical planning note.",
+                "scope": "broadcast",
+                "list_id": "campaigns.brand.example",
+                "variant_count": 1,
+            }
 
     summary = aggregate_records(
         [
