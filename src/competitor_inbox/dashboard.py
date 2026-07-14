@@ -583,12 +583,47 @@ def _hero_coverage(source_completeness: str, scope: str) -> tuple[str, str]:
     )
 
 
+def _hero_priority(summary: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return an explicit launch-only brand universe, or no restriction.
+
+    The dashboard is a reusable product, so named launch brands cannot be a
+    global default. A launch build may bind an ordered list in census metadata;
+    when present, only eligible brands in that list may power the single-brand
+    hero and the order breaks equal-volume ties.
+    """
+
+    raw = summary.get("metadata", {}).get("hero_priority_brands")
+    if raw in (None, []):
+        return ()
+    if not isinstance(raw, list):
+        raise HeroRenderError("hero_priority_brands must be an ordered list")
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in raw:
+        brand = " ".join(str(value or "").split()).strip()
+        key = brand.casefold()
+        if not brand or key in seen:
+            raise HeroRenderError("hero_priority_brands contains an empty or duplicate value")
+        seen.add(key)
+        output.append(brand)
+    return tuple(output)
+
+
 def _hero_context(summary: Mapping[str, Any], variant: str) -> dict[str, Any]:
-    priority = {name.casefold(): index for index, name in enumerate(
-        ("SKIMS", "Olipop", "Poppi", "AG1", "Huel", "Liquid Death", "Nike")
-    )}
+    priority_brands = _hero_priority(summary)
+    priority = {
+        name.casefold(): index for index, name in enumerate(priority_brands)
+    }
     eligible = sorted(
-        (brand for brand in summary.get("brands", []) if brand.get("hook_eligible")),
+        (
+            brand
+            for brand in summary.get("brands", [])
+            if brand.get("hook_eligible")
+            and (
+                not priority
+                or str(brand.get("brand", "")).casefold() in priority
+            )
+        ),
         key=lambda brand: (
             -int(brand.get("qualified_broadcasts", 0)),
             priority.get(str(brand.get("brand", "")).casefold(), len(priority)),
@@ -630,6 +665,21 @@ def _hero_context(summary: Mapping[str, Any], variant: str) -> dict[str, Any]:
             "footer_label": f"{brand['brand']} census",
             "coverage_label": coverage_label,
             "coverage_note": coverage_note,
+            "hook": {
+                "type": "priority_brand" if priority else "generic_brand",
+                "selection_basis": "largest qualified-broadcast denominator",
+                "brand": str(brand["brand"]),
+                "numerator": evergreen,
+                "denominator": total,
+                "descriptor": "evergreen content",
+                "date_start": str(brand.get("first_observed", "")),
+                "date_end": str(brand.get("last_observed", "")),
+                "observed_days": int(brand.get("observed_days", 0)),
+                "coverage_label": coverage_label,
+                "source_completeness": str(
+                    brand.get("source_completeness") or "partial"
+                ),
+            },
         }
     total = int(summary.get("broadcast_count", 0))
     brands = int(summary.get("brand_count", 0))
@@ -645,6 +695,18 @@ def _hero_context(summary: Mapping[str, Any], variant: str) -> dict[str, Any]:
     uncertain = int(scopes.get("uncertain", 0) or 0)
     coverage_label, coverage_note = _hero_coverage(
         str(metadata.get("source_completeness") or "partial"), "portfolio"
+    )
+    strongest_quadrant = max(
+        (
+            {
+                "descriptor": str(row.get("name") or "qualified broadcasts").casefold(),
+                "numerator": int(row.get("count", 0)),
+            }
+            for row in summary.get("quadrants", [])
+            if isinstance(row, Mapping)
+        ),
+        key=lambda row: (row["numerator"], row["descriptor"]),
+        default={"descriptor": "qualified broadcasts", "numerator": total},
     )
     return {
         "scope": "portfolio-dashboard" if variant == "brand" else "portfolio",
@@ -664,6 +726,25 @@ def _hero_context(summary: Mapping[str, Any], variant: str) -> dict[str, Any]:
         "footer_label": "Portfolio census",
         "coverage_label": coverage_label,
         "coverage_note": coverage_note,
+        "hook": {
+            "type": "multi_brand_fallback" if priority else "generic_portfolio",
+            "selection_basis": (
+                "no eligible configured priority brand"
+                if priority
+                else "no eligible single brand"
+            ),
+            "brand": None,
+            "numerator": int(strongest_quadrant["numerator"]),
+            "denominator": total,
+            "descriptor": str(strongest_quadrant["descriptor"]),
+            "date_start": str(metadata.get("first_observed", "")),
+            "date_end": str(metadata.get("last_observed", "")),
+            "observed_days": int(metadata.get("observed_days", 0)),
+            "coverage_label": coverage_label,
+            "source_completeness": str(
+                metadata.get("source_completeness") or "partial"
+            ),
+        },
     }
 
 
@@ -709,6 +790,12 @@ def write_hero_candidates(
         _atomic_html(root / "hero-brand.html", render_hero(summary, "brand"), retain_previous=False),
         _atomic_html(root / "hero-portfolio.html", render_hero(summary, "portfolio"), retain_previous=False),
     ]
+
+
+def hero_selection(summary: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the exact hook evidence rendered on the primary hero."""
+
+    return dict(_hero_context(summary, "brand")["hook"])
 
 
 def _sha256(path: Path) -> str:
@@ -842,6 +929,18 @@ def write_freeze_manifest(
 
     dashboard = Path(dashboard_path).expanduser().resolve()
     heroes = [Path(path).expanduser().resolve() for path in hero_paths]
+    if len(heroes) != len(_HERO_NAMES) or {path.name for path in heroes} != set(
+        _HERO_NAMES
+    ):
+        raise HeroRenderError("freeze requires the canonical brand and portfolio hero HTML")
+    for path in heroes:
+        variant = "brand" if path.name == "hero-brand.html" else "portfolio"
+        try:
+            rendered = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise HeroRenderError("freeze could not read canonical hero HTML") from error
+        if rendered != render_hero(summary, variant):
+            raise HeroRenderError("hero HTML does not match the census used by the freeze")
     screenshots = [Path(path).expanduser().resolve() for path in screenshot_paths]
     screenshot_entries = []
     for path in screenshots:
@@ -880,6 +979,7 @@ def write_freeze_manifest(
         },
         "qualified_broadcasts": int(summary.get("broadcast_count", 0)),
         "metrics": frozen_metrics,
+        "hero_selection": hero_selection(summary),
         "definition": "scope=broadcast; lifecycle and uncertain excluded",
         "dedupe": "source UID, Message-ID, content hash, then brand and campaign similarity",
         "filters": summary.get("metadata", {}).get("filters", {}),
@@ -902,6 +1002,7 @@ __all__ = [
     "audit_hero_png",
     "find_headless_browser",
     "generate_dashboard",
+    "hero_selection",
     "render_dashboard",
     "render_hero",
     "render_hero_pngs",
