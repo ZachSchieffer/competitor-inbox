@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Iterable, Mapping, Sequence
 
-from .schema import MessageScope, NormalizedMessage
+from .schema import MessageScope, NormalizedMessage, SourceCompleteness
 
 
 @dataclass(slots=True)
@@ -120,7 +120,15 @@ def _build_row(
             unclassified += 1
 
     raw_count = raw_fetched if raw_fetched is not None else parsed_input + parse_failures
-    completeness = "complete" if parse_failures == 0 and ingestion_errors == 0 else "partial"
+    if parse_failures or ingestion_errors:
+        completeness = "partial"
+    elif any(
+        record.source_completeness == SourceCompleteness.CURATED_EXPORT.value
+        for record in records
+    ):
+        completeness = SourceCompleteness.CURATED_EXPORT.value
+    else:
+        completeness = SourceCompleteness.COMPLETE.value
     if is_total:
         hook_status = "summary"
     elif len(broadcasts) >= 30 and observed_days >= 90 and completeness == "complete":

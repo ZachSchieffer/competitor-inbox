@@ -111,6 +111,7 @@ def _source(config: AppConfig, *, since: datetime) -> Iterable[SourceEnvelope]:
                 host=config.source.host,
                 port=config.source.port,
                 sender_domains=tuple(config.source.domains),
+                fetch_batch_size=config.source.fetch_batch_size,
             )
         )
         return adapter.iter_messages(since=since, prompt_for_credential=False)

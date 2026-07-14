@@ -24,7 +24,7 @@ from competitor_inbox.pipeline import (
     ingest,
 )
 from competitor_inbox.schedule import install as install_schedule
-from competitor_inbox.schema import NormalizedMessage, SourceEnvelope
+from competitor_inbox.schema import NormalizedMessage, SourceCompleteness, SourceEnvelope
 from competitor_inbox.sources.imap import ImapSourceError
 from competitor_inbox.store import MasterStore
 
@@ -63,6 +63,7 @@ def test_config_round_trip_and_calendar_month_boundary(tmp_path: Path) -> None:
             mbox_path=str(tmp_path / "mail.mbox"),
             domains=["northstar.example"],
             brand_aliases={"northstar.example": "Northstar"},
+            fetch_batch_size=37,
         ),
     )
     path = save_config(config)
@@ -71,6 +72,7 @@ def test_config_round_trip_and_calendar_month_boundary(tmp_path: Path) -> None:
     assert loaded.source.mode == "mbox"
     assert loaded.source.domains == ["northstar.example"]
     assert loaded.source.brand_aliases == {"northstar.example": "Northstar"}
+    assert loaded.source.fetch_batch_size == 37
     assert path.stat().st_mode & 0o077 == 0
     assert calendar_months_ago(
         datetime(2024, 3, 31, tzinfo=timezone.utc), 1, "UTC"
@@ -276,4 +278,57 @@ def test_unknown_parse_failure_disqualifies_single_brand_hook() -> None:
     _bind_coverage_integrity(summary, result)
 
     assert summary["metadata"]["source_completeness"] == "partial"
+    assert summary["brands"][0]["hook_eligible"] is False
+
+
+def test_curated_export_provenance_survives_coverage_binding() -> None:
+    records = [
+        NormalizedMessage(
+            id=f"curated-{index}",
+            source_type="mbox",
+            source_uid=str(index),
+            canonical_received_at=(NOW - timedelta(days=index % 120)).isoformat(),
+            received_at_source="mbox_separator",
+            received_at_trusted=True,
+            source_completeness=SourceCompleteness.CURATED_EXPORT.value,
+            brand="Northstar",
+            sender_name="Northstar",
+            sender_domain="northstar.example",
+            subject=f"Campaign {index}",
+            preheader="",
+            visible_text="Editorial guide.",
+            content_hash=f"curated-hash-{index}",
+            scope="broadcast",
+            scope_reason="fixture",
+            scope_confidence=1.0,
+            seasonal=False,
+        )
+        for index in range(300)
+    ]
+    table = build_coverage_table(records)
+    gate = evaluate_early_data_gate(table)
+    result = PipelineResult(
+        coverage=table,
+        early_gate=gate,
+        dedupe=DedupeReport(
+            messages=records,
+            input_count=300,
+            distinct_count=300,
+            variants_collapsed=0,
+        ),
+        new_envelopes=300,
+        new_distinct_messages=300,
+        parse_failures=0,
+        ingestion_errors=0,
+        since="",
+        through="",
+    )
+    summary = aggregate_records(dashboard_records(records))
+
+    _bind_coverage_integrity(summary, result)
+
+    assert gate.passed is True
+    assert summary["metadata"]["source_completeness"] == "curated_export"
+    assert summary["metadata"]["source_error_count"] == 0
+    assert summary["brands"][0]["source_completeness"] == "curated_export"
     assert summary["brands"][0]["hook_eligible"] is False

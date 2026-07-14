@@ -30,6 +30,7 @@ class SourceConfig:
     domains: list[str] = field(default_factory=list)
     brand_aliases: dict[str, str] = field(default_factory=dict)
     mbox_path: str = ""
+    fetch_batch_size: int = 200
 
 
 @dataclass(slots=True)
@@ -89,6 +90,7 @@ def load_config(path: Path | None = None, *, data_root: Path | None = None) -> A
                 ).items()
             },
             mbox_path=str(source_raw.get("mbox_path") or source_raw.get("path") or ""),
+            fetch_batch_size=int(source_raw.get("fetch_batch_size", 200)),
         ),
         analysis=AnalysisConfig(
             model=str(analysis_raw.get("model", "claude-sonnet-4-6")),
@@ -136,6 +138,7 @@ def save_config(config: AppConfig, path: Path | None = None) -> Path:
             f"address = {_toml_quote(config.source.account)}",
             f"label = {_toml_quote(config.source.label)}",
             f"mbox_path = {_toml_quote(config.source.mbox_path)}",
+            f"fetch_batch_size = {config.source.fetch_batch_size}",
             "",
             "[filters]",
             f"sender_domains = [{domains}]",

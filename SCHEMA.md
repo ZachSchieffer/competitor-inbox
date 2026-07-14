@@ -33,8 +33,9 @@ Angle-bracket values below are public schema examples.
 |---|---|---|
 | `id` | string | Stable SHA-256 record identity |
 | `schema_version` | string | Record schema version |
-| `source_type` | string | `imap`, `mbox`, or `synthetic` |
+| `source_type` | string | `imap`, `mbox`, `curated_export`, or `synthetic` |
 | `source_uid` | string | Provider UID inside the private store |
+| `source_completeness` | enum | `complete` or `curated_export` |
 | `uidvalidity` | string or null | IMAP UID namespace |
 | `mailbox` | string | Sanitized logical mailbox label |
 | `message_id` | string or null | Hash of normalized RFC Message-ID |
@@ -45,6 +46,21 @@ Angle-bracket values below are public schema examples.
 | `variant_ids` | array[string] | Stable private IDs in the cluster |
 
 Provider identities remain private. Public exports use aggregate counts only.
+
+`complete` means the record came from the error-accounted source window read by
+the adapter. It is the default for IMAP and mbox records. `curated_export`
+means the record came from an approved existing subset or curated export whose
+full source range cannot be proven. This is provenance, not a parse error, so a
+curated export may still pass the Early Data Gate. Coverage rows report it as
+`curated_export`, and it can never support a single-brand hook or set
+`hook_eligible` to true.
+
+Records whose `source_type` is `curated_export` are always stored with
+`source_completeness: curated_export`. Existing curated annotations may supply
+an unquantified offer type, a recognized occasion, or an intent when the email
+text has no deterministic result. Text evidence always wins. Curated numeric
+offer depths are discarded because every numeric claim requires deterministic
+subject, preheader, or visible-text evidence.
 
 ### Brand and dates
 
@@ -102,7 +118,7 @@ browsable but are excluded from broadcast metrics.
 | Field | Type | Description |
 |---|---|---|
 | `intent` | string or null | Dominant intent label |
-| `intent_source` | string or null | `deterministic`, `ai`, or `manual` |
+| `intent_source` | string or null | `deterministic`, `ai`, `manual`, or `curated_export` |
 | `intent_confidence` | number or null | Value from 0 through 1 |
 | `classification_model` | string or null | Model identifier when optional AI ran |
 | `offer_candidates` | array[object] | All supported offer candidates |

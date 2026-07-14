@@ -333,6 +333,7 @@ def parse_envelope(
         canonical_received_at=isoformat_utc(canonical_date),
         received_at_source=envelope.received_at_source,
         received_at_trusted=envelope.received_at_trusted,
+        source_completeness=envelope.source_completeness,
         header_date=isoformat_utc(header_date_value) if header_date_value else None,
         date_skew_days=round(date_skew, 3) if date_skew is not None else None,
         brand=brand,

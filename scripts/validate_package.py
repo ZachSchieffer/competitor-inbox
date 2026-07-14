@@ -16,8 +16,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 import re
 import sys
-from typing import Any, Iterable, Sequence
-from urllib.parse import urlsplit, urlunsplit
+from typing import Any, Iterable, Mapping, Sequence
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 
 EXPECTED_KEYWORD = "INBOX"
@@ -28,11 +28,13 @@ DEFAULT_REQUIRED_KINDS = {
     "bolu",
     "asana",
     "repository_docs",
+    "screenshot_manifest",
 }
-TEXT_KINDS = DEFAULT_REQUIRED_KINDS
+TEXT_KINDS = DEFAULT_REQUIRED_KINDS - {"screenshot_manifest"}
 NO_LINK_KINDS = {"linkedin_post", "pinned_comment"}
 LINKEDIN_FORMAT_KINDS = {"linkedin_post", "pinned_comment"}
 ALLOWED_DYNAMIC_TOKENS = {"name", "first name", "company", "brand"}
+URL_STATUSES = {"CONFIRMED", "NEEDS-CONFIRMATION", "UNAVAILABLE"}
 
 URL_RE = re.compile(r"https?://[^\s<>()\[\]{}]+", re.IGNORECASE)
 ANGLE_TOKEN_RE = re.compile(r"<[^>\r\n]+>")
@@ -63,9 +65,40 @@ BANNED_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("dive_deep", re.compile(r"\bdive deep\b", re.IGNORECASE)),
     ("revolutionary", re.compile(r"\brevolutionary\b", re.IGNORECASE)),
     ("false_negative", re.compile(r"\bit['’]?s not\b.{0,120}\bit['’]?s\b", re.IGNORECASE | re.DOTALL)),
+    (
+        "false_negative",
+        re.compile(
+            r"\b(?:it|this|that)\s+(?:is not|isn['’]t|was not|wasn['’]t)\b"
+            r".{0,140}\b(?:it|this|that)\s+(?:is|was)\b",
+            re.IGNORECASE | re.DOTALL,
+        ),
+    ),
     ("reversal_people", re.compile(r"\bmost people think\b", re.IGNORECASE)),
     ("reversal_truth", re.compile(r"\bthe truth is\b", re.IGNORECASE)),
+    (
+        "reversal_everyone",
+        re.compile(
+            r"\beveryone\s+(?:focuses|thinks|does|uses)\b.{0,180}"
+            r"\b(?:the real|the truth|actually)\b",
+            re.IGNORECASE | re.DOTALL,
+        ),
+    ),
+    (
+        "asyndeton",
+        re.compile(
+            r"\bNo\s+[^.!?\n]{1,80}[.!?]\s+No\s+[^.!?\n]{1,80}[.!?]"
+            r"\s+No\s+[^.!?\n]{1,80}[.!?]",
+            re.IGNORECASE,
+        ),
+    ),
     ("rhetorical_setup", re.compile(r"(?mi)^\s*(?:the reality|here['’]s why|the strategy)\s*[?:]\s*$")),
+    (
+        "rhetorical_question",
+        re.compile(
+            r"(?mi)^\s*(?:why\s+(?:does|do|is|are|should|would|can)|"
+            r"what\s+(?:does|do|is|are))\b[^?\n]{0,120}\?\s*$"
+        ),
+    ),
     ("mechanism_contrast", re.compile(r"\bin ways\b.{0,100}\b(?:can['’]?t|cannot)\b", re.IGNORECASE)),
     ("vague_authority", re.compile(r"\bi(?:'ve| have) seen this play out\b|\bi see this constantly\b", re.IGNORECASE)),
     ("clever_comparative", re.compile(r"\bbad\b.{0,120}\bgreat\b", re.IGNORECASE | re.DOTALL)),
@@ -78,6 +111,10 @@ PLACEHOLDER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("fixme", re.compile(r"\bFIXME\b", re.IGNORECASE)),
     ("placeholder_word", re.compile(r"\bPLACEHOLDER\b", re.IGNORECASE)),
     ("dummy_word", re.compile(r"\bDUMMY(?: URL)?\b", re.IGNORECASE)),
+    (
+        "unresolved_named_token",
+        re.compile(r"\b(?:[A-Z][A-Z0-9]*_)+(?:URL|LINK|ID|GID|PATH|SHA|TOKEN|HERE)\b"),
+    ),
 )
 
 DUMMY_HOSTS = {
@@ -88,6 +125,9 @@ DUMMY_HOSTS = {
     "test",
     "invalid",
 }
+
+_HEX_SHA256_RE = re.compile(r"[0-9a-f]{64}", re.IGNORECASE)
+_HEX_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -148,12 +188,99 @@ def _confirmed_urls(manifest: dict[str, Any]) -> set[str]:
     for item in manifest.get("urls", []):
         if not isinstance(item, dict):
             continue
-        if item.get("status") != "CONFIRMED":
+        if (
+            item.get("status") != "CONFIRMED"
+            or item.get("verified") is not True
+            or not str(item.get("verification") or "").strip()
+        ):
             continue
         value = item.get("url")
-        if isinstance(value, str):
+        if isinstance(value, str) and not _url_contract_problem(value):
             confirmed.add(_normalize_url(value))
     return confirmed
+
+
+def _url_contract_problem(value: str) -> str | None:
+    decoded = unquote(value).strip()
+    parsed = urlsplit(decoded)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        return "invalid_url"
+    host = parsed.hostname.lower()
+    if host in DUMMY_HOSTS or any(host.endswith(f".{candidate}") for candidate in DUMMY_HOSTS):
+        return "dummy_url"
+    if any(pattern.search(decoded) for _, pattern in PLACEHOLDER_PATTERNS):
+        return "dummy_url"
+    if ANGLE_TOKEN_RE.search(decoded) or BRACE_TOKEN_RE.search(decoded) or SQUARE_TOKEN_RE.search(decoded):
+        return "dummy_url"
+    return None
+
+
+def _is_kit_requirement(value: Any) -> bool:
+    normalized = re.sub(r"[_-]+", " ", str(value or "")).casefold()
+    return re.search(r"\bkit\b", normalized) is not None
+
+
+def _valid_sha256(value: Any) -> bool:
+    return isinstance(value, str) and _HEX_SHA256_RE.fullmatch(value) is not None
+
+
+def _nested_value(value: Mapping[str, Any], dotted_path: str) -> Any:
+    current: Any = value
+    for part in dotted_path.split("."):
+        if not isinstance(current, Mapping) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _numeric_tokens(value: Any) -> set[str]:
+    if isinstance(value, bool):
+        return set()
+    if isinstance(value, (int, float)):
+        return {_number_token(str(value))}
+    if isinstance(value, Mapping):
+        output: set[str] = set()
+        for nested in value.values():
+            output.update(_numeric_tokens(nested))
+        return output
+    if isinstance(value, list):
+        output = set()
+        for nested in value:
+            output.update(_numeric_tokens(nested))
+        return output
+    if isinstance(value, str):
+        return {number for number, _ in _numbers_without_urls(value)}
+    return set()
+
+
+def _operational_number_tokens(manifest: Mapping[str, Any]) -> tuple[set[str], list[Issue]]:
+    """Return explicitly documented non-census numbers.
+
+    Final copy legitimately contains operating windows such as 2 hours, day 7,
+    and 48 hours. Each one must be named and explained so a census count cannot
+    be smuggled through an unreviewed list of arbitrary static values.
+    """
+
+    issues: list[Issue] = []
+    raw_values = manifest.get("static_numbers", [])
+    if not isinstance(raw_values, list):
+        return set(), [Issue("manifest", "invalid_static_numbers_contract")]
+    tokens: set[str] = set()
+    for index, item in enumerate(raw_values):
+        name = f"static_numbers[{index}]"
+        if not isinstance(item, Mapping):
+            issues.append(Issue(name, "invalid_static_number_contract"))
+            continue
+        if item.get("kind") != "operational":
+            issues.append(Issue(name, "static_number_must_be_operational"))
+        value = item.get("value")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            issues.append(Issue(name, "invalid_static_number_value"))
+            continue
+        if not str(item.get("reason") or "").strip():
+            issues.append(Issue(name, "missing_static_number_reason"))
+        tokens.add(_number_token(str(value)))
+    return tokens, issues
 
 
 def _validate_text_artifact(
@@ -181,6 +308,8 @@ def _validate_text_artifact(
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return [Issue(name, "artifact_not_utf8_text")]
+    if not text.strip():
+        issues.append(Issue(name, "empty_artifact"))
 
     for rule_id, pattern in PLACEHOLDER_PATTERNS:
         for match in pattern.finditer(text):
@@ -212,7 +341,7 @@ def _validate_text_artifact(
         issues.append(Issue(name, "external_link_not_allowed"))
 
     requires_keyword = artifact.get("requires_keyword", kind not in {"pinned_comment", "repository_docs"})
-    if requires_keyword and keyword not in text:
+    if requires_keyword and not re.search(rf"\b{re.escape(keyword)}\b", text):
         issues.append(Issue(name, "missing_keyword"))
     for match in re.finditer(r"(?i)\bcomment\s+[\"'“”‘’]?([A-Z]{2,12})\b", text):
         if match.group(1).upper() != keyword:
@@ -233,19 +362,166 @@ def _validate_text_artifact(
     if "allowed_numbers" not in artifact:
         issues.append(Issue(name, "missing_allowed_numbers_contract"))
     else:
-        allowed = {_number_token(str(value)) for value in artifact.get("allowed_numbers", [])}
-        for number, line in _numbers_without_urls(text):
-            if number not in allowed:
-                issues.append(Issue(name, "unfrozen_or_stale_number", line, number))
+        allowed_values = artifact.get("allowed_numbers")
+        if not isinstance(allowed_values, list):
+            issues.append(Issue(name, "invalid_allowed_numbers_contract"))
+        else:
+            allowed = {_number_token(str(value)) for value in allowed_values}
+            for number, line in _numbers_without_urls(text):
+                if number not in allowed:
+                    issues.append(Issue(name, "unfrozen_or_stale_number", line, number))
 
     return issues
 
 
-def _validate_claims(root: Path, manifest: dict[str, Any]) -> list[Issue]:
+def _load_screenshot_manifest(
+    root: Path,
+    artifacts: Sequence[dict[str, Any]],
+    *,
+    final_contract: bool,
+) -> tuple[dict[str, Any] | None, list[Issue]]:
+    issues: list[Issue] = []
+    candidates = [artifact for artifact in artifacts if artifact.get("kind") == "screenshot_manifest"]
+    if not candidates:
+        return None, issues
+    if len(candidates) > 1:
+        issues.append(Issue("manifest", "duplicate_screenshot_manifest"))
+    artifact = candidates[0]
+    name = str(artifact.get("name") or "screenshot_manifest")
+    raw_path = artifact.get("path")
+    if not isinstance(raw_path, str) or not raw_path:
+        return None, [*issues, Issue(name, "missing_artifact_path")]
+    path = (root / raw_path).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return None, [*issues, Issue(name, "artifact_outside_package_root")]
+    if not path.is_file():
+        return None, [*issues, Issue(name, "missing_artifact_file")]
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None, [*issues, Issue(name, "invalid_screenshot_manifest_json")]
+    if not isinstance(value, dict):
+        return None, [*issues, Issue(name, "invalid_screenshot_manifest_contract")]
+
+    if not _valid_sha256(value.get("census_sha256")):
+        issues.append(Issue(name, "invalid_census_hash"))
+    dashboard = value.get("dashboard")
+    if not isinstance(dashboard, dict) or not _valid_sha256(dashboard.get("sha256")):
+        issues.append(Issue(name, "invalid_dashboard_hash"))
+    screenshots = value.get("screenshots")
+    if not isinstance(screenshots, list) or (
+        final_contract and not screenshots
+    ):
+        issues.append(Issue(name, "missing_frozen_screenshots"))
+    elif any(
+        not isinstance(item, dict) or not _valid_sha256(item.get("sha256"))
+        for item in screenshots
+    ):
+        issues.append(Issue(name, "invalid_frozen_screenshot_hash"))
+    metrics = value.get("metrics")
+    if not isinstance(metrics, dict):
+        issues.append(Issue(name, "missing_frozen_metrics"))
+    else:
+        for field in (
+            "raw_messages",
+            "qualified_broadcasts",
+            "brand_count",
+            "broadcast_brand_count",
+            "observed_days",
+            "offer_count",
+            "seasonal_count",
+            "seasonal_promotion_count",
+            "cadence_coverage_brand_count",
+        ):
+            if not isinstance(metrics.get(field), int):
+                issues.append(Issue(name, "invalid_frozen_metric", detail=field))
+        for field in (
+            "offer_share",
+            "seasonal_share",
+            "seasonal_offer_share",
+            "cadence_coverage_brand_share",
+        ):
+            if isinstance(metrics.get(field), bool) or not isinstance(
+                metrics.get(field), (int, float)
+            ):
+                issues.append(Issue(name, "invalid_frozen_metric", detail=field))
+        quadrants = metrics.get("quadrants")
+        if not isinstance(quadrants, dict) or any(
+            not isinstance(quadrants.get(label), Mapping)
+            for label in (
+                "Evergreen content",
+                "Everyday promotion",
+                "Seasonal promotion",
+                "Seasonal content",
+            )
+        ):
+            issues.append(Issue(name, "invalid_frozen_quadrants"))
+    if not isinstance(value.get("qualified_broadcasts"), int):
+        issues.append(Issue(name, "invalid_frozen_broadcast_count"))
+    elif isinstance(metrics, dict) and value.get("qualified_broadcasts") != metrics.get(
+        "qualified_broadcasts"
+    ):
+        issues.append(Issue(name, "frozen_broadcast_count_mismatch"))
+    if final_contract and not _HEX_GIT_SHA_RE.fullmatch(
+        str(value.get("git_sha") or "")
+    ):
+        issues.append(Issue(name, "invalid_frozen_git_sha"))
+    if final_contract and value.get("git_dirty") is not False:
+        issues.append(Issue(name, "frozen_worktree_not_clean"))
+    return value, issues
+
+
+def _validate_url_contracts(manifest: dict[str, Any]) -> tuple[set[str], list[Issue]]:
+    issues: list[Issue] = []
+    raw_urls = manifest.get("urls", [])
+    if not isinstance(raw_urls, list):
+        return set(), [Issue("manifest", "invalid_urls_contract")]
+    for item in raw_urls:
+        if not isinstance(item, dict):
+            issues.append(Issue("manifest", "invalid_url_contract"))
+            continue
+        name = str(item.get("name") or "url")
+        status = str(item.get("status") or "")
+        value = item.get("url")
+        if status not in URL_STATUSES:
+            issues.append(Issue(name, "invalid_url_status", detail=status))
+        if status in {"NEEDS-CONFIRMATION", "UNAVAILABLE"}:
+            if isinstance(value, str) and value.strip():
+                issues.append(Issue(name, "unconfirmed_url_value_present"))
+            if not str(item.get("reason") or "").strip():
+                issues.append(Issue(name, "missing_url_status_reason"))
+            continue
+        if status != "CONFIRMED":
+            continue
+        if not isinstance(value, str) or not value.strip():
+            issues.append(Issue(name, "missing_confirmed_url"))
+            continue
+        if problem := _url_contract_problem(value):
+            issues.append(Issue(name, problem))
+        if item.get("verified") is not True or not str(item.get("verification") or "").strip():
+            issues.append(Issue(name, "url_confirmed_without_verification"))
+    return _confirmed_urls(manifest), issues
+
+
+def _validate_claims(
+    root: Path,
+    manifest: dict[str, Any],
+    *,
+    screenshot_manifest: Mapping[str, Any] | None = None,
+    require_freeze_binding: bool = False,
+) -> list[Issue]:
     issues: list[Issue] = []
     artifacts = {str(item.get("name")): item for item in manifest.get("artifacts", []) if isinstance(item, dict)}
-    for claim in manifest.get("frozen_claims", []):
+    claims = manifest.get("frozen_claims", [])
+    if not isinstance(claims, list):
+        return [Issue("manifest", "invalid_frozen_claims_contract")]
+    if require_freeze_binding and not claims:
+        issues.append(Issue("manifest", "missing_frozen_claims"))
+    for claim in claims:
         if not isinstance(claim, dict):
+            issues.append(Issue("manifest", "invalid_frozen_claim_contract"))
             continue
         claim_name = str(claim.get("name") or "unnamed_claim")
         expected = _number_token(str(claim.get("expected", "")))
@@ -259,6 +535,22 @@ def _validate_claims(root: Path, manifest: dict[str, Any]) -> list[Issue]:
         except re.error:
             issues.append(Issue(claim_name, "invalid_frozen_claim_regex"))
             continue
+        freeze_field = claim.get("freeze_field")
+        if screenshot_manifest is not None:
+            if not isinstance(freeze_field, str) or not freeze_field:
+                issues.append(Issue(claim_name, "missing_freeze_field"))
+            elif not freeze_field.startswith("metrics."):
+                issues.append(
+                    Issue(claim_name, "freeze_field_outside_metrics", detail=freeze_field)
+                )
+            else:
+                frozen_value = _nested_value(screenshot_manifest, freeze_field)
+                if frozen_value is None:
+                    issues.append(Issue(claim_name, "unknown_freeze_field", detail=freeze_field))
+                elif _number_token(str(frozen_value)) != expected:
+                    issues.append(Issue(claim_name, "frozen_claim_expected_mismatch", detail=freeze_field))
+        elif require_freeze_binding:
+            issues.append(Issue(claim_name, "missing_screenshot_manifest_binding"))
         for target in targets:
             artifact = artifacts.get(str(target))
             if artifact is None:
@@ -268,6 +560,10 @@ def _validate_claims(root: Path, manifest: dict[str, Any]) -> list[Issue]:
             if not isinstance(path_value, str):
                 continue
             path = (root / path_value).resolve()
+            try:
+                path.relative_to(root)
+            except ValueError:
+                continue
             if not path.is_file():
                 continue
             text = path.read_text(encoding="utf-8")
@@ -275,7 +571,7 @@ def _validate_claims(root: Path, manifest: dict[str, Any]) -> list[Issue]:
             if claim.get("required", True) and not matches:
                 issues.append(Issue(str(target), "required_frozen_claim_missing", detail=claim_name))
             for match in matches:
-                raw_value = match.groupdict().get("value") if match.groupdict() else match.group(0)
+                raw_value = match.groupdict().get("value") or match.group(0)
                 if _number_token(raw_value) != expected:
                     issues.append(
                         Issue(
@@ -306,23 +602,77 @@ def validate_manifest(manifest_path: Path, *, allow_partial: bool = False) -> di
     if not isinstance(artifacts, list):
         artifacts = []
         issues.append(Issue("manifest", "missing_artifacts"))
-    kinds = {str(item.get("kind")) for item in artifacts if isinstance(item, dict)}
-    if "kit" in kinds or any("kit" == str(item.get("name", "")).lower() for item in artifacts if isinstance(item, dict)):
+    artifact_contracts = [item for item in artifacts if isinstance(item, dict)]
+    kinds = {str(item.get("kind")) for item in artifact_contracts}
+    if any(
+        _is_kit_requirement(item.get("kind")) or _is_kit_requirement(item.get("name"))
+        for item in artifact_contracts
+    ):
         issues.append(Issue("manifest", "kit_must_not_be_required"))
-    required_components = {str(item).lower() for item in manifest.get("required_components", [])}
-    if "kit" in required_components or "kit_broadcast" in required_components:
+    required_components = manifest.get("required_components", [])
+    if not isinstance(required_components, list):
+        issues.append(Issue("manifest", "invalid_required_components"))
+        required_components = []
+    if any(_is_kit_requirement(item) for item in required_components):
         issues.append(Issue("manifest", "kit_must_not_be_required"))
     if not allow_partial:
         for missing in sorted(DEFAULT_REQUIRED_KINDS - kinds):
             issues.append(Issue("manifest", "missing_required_artifact_kind", detail=missing))
 
-    confirmed_urls = _confirmed_urls(manifest)
-    for item in manifest.get("urls", []):
-        if not isinstance(item, dict):
-            issues.append(Issue("manifest", "invalid_url_contract"))
-            continue
-        if item.get("status") != "CONFIRMED":
-            issues.append(Issue(str(item.get("name") or "url"), "url_not_confirmed"))
+    confirmed_urls, url_issues = _validate_url_contracts(manifest)
+    issues.extend(url_issues)
+    if not allow_partial and not confirmed_urls:
+        issues.append(Issue("manifest", "missing_confirmed_url"))
+    if not allow_partial:
+        raw_urls = manifest.get("urls", [])
+        public_notion_urls = [
+            item
+            for item in raw_urls
+            if isinstance(item, dict) and item.get("role") == "public_notion"
+        ]
+        if not public_notion_urls:
+            issues.append(Issue("manifest", "missing_public_notion_url"))
+        elif not any(
+            item.get("status") == "CONFIRMED"
+            and item.get("verified") is True
+            and item.get("verification") == "logged_out"
+            and isinstance(item.get("url"), str)
+            and _url_contract_problem(str(item.get("url"))) is None
+            for item in public_notion_urls
+        ):
+            issues.append(Issue("public_notion", "public_notion_not_logged_out_verified"))
+
+    screenshot_manifest, screenshot_issues = _load_screenshot_manifest(
+        root,
+        artifact_contracts,
+        final_contract=not allow_partial,
+    )
+    issues.extend(screenshot_issues)
+    if not allow_partial:
+        operational_numbers, static_issues = _operational_number_tokens(manifest)
+        issues.extend(static_issues)
+        frozen_metrics = (
+            screenshot_manifest.get("metrics", {})
+            if isinstance(screenshot_manifest, Mapping)
+            else {}
+        )
+        authorized_numbers = _numeric_tokens(frozen_metrics) | operational_numbers
+        for artifact in artifact_contracts:
+            if artifact.get("kind") not in TEXT_KINDS:
+                continue
+            allowed_numbers = artifact.get("allowed_numbers")
+            if not isinstance(allowed_numbers, list):
+                continue
+            for value in allowed_numbers:
+                token = _number_token(str(value))
+                if token not in authorized_numbers:
+                    issues.append(
+                        Issue(
+                            str(artifact.get("name") or artifact.get("kind") or "artifact"),
+                            "allowed_number_not_frozen_or_static",
+                            detail=token,
+                        )
+                    )
 
     for artifact in artifacts:
         if not isinstance(artifact, dict):
@@ -339,14 +689,26 @@ def validate_manifest(manifest_path: Path, *, allow_partial: bool = False) -> di
                 )
             )
 
-    for image in manifest.get("images", []):
+    images = manifest.get("images", [])
+    if not isinstance(images, list):
+        issues.append(Issue("manifest", "invalid_images_contract"))
+        images = []
+    if not allow_partial and not images:
+        issues.append(Issue("manifest", "missing_required_image"))
+    frozen_hashes = {
+        str(item.get("sha256"))
+        for item in (screenshot_manifest or {}).get("screenshots", [])
+        if isinstance(item, dict) and _valid_sha256(item.get("sha256"))
+    }
+    package_hashes: set[str] = set()
+    for image in images:
         if not isinstance(image, dict):
             issues.append(Issue("manifest", "invalid_image_contract"))
             continue
         name = str(image.get("name") or "image")
         raw_path = image.get("path")
         expected_hash = image.get("sha256")
-        if not isinstance(raw_path, str) or not isinstance(expected_hash, str):
+        if not isinstance(raw_path, str) or not _valid_sha256(expected_hash):
             issues.append(Issue(name, "invalid_image_contract"))
             continue
         path = (root / raw_path).resolve()
@@ -359,16 +721,36 @@ def validate_manifest(manifest_path: Path, *, allow_partial: bool = False) -> di
             issues.append(Issue(name, "missing_image"))
             continue
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        package_hashes.add(actual)
         if actual != expected_hash:
             issues.append(Issue(name, "stale_image_hash"))
+        if screenshot_manifest is not None and actual not in frozen_hashes:
+            issues.append(Issue(name, "image_hash_not_frozen"))
 
-    issues.extend(_validate_claims(root, manifest))
+    if screenshot_manifest is not None:
+        for missing_hash in sorted(frozen_hashes - package_hashes):
+            issues.append(
+                Issue(
+                    "screenshot_manifest",
+                    "frozen_screenshot_missing_from_package",
+                    detail=missing_hash[:16],
+                )
+            )
+
+    issues.extend(
+        _validate_claims(
+            root,
+            manifest,
+            screenshot_manifest=screenshot_manifest,
+            require_freeze_binding=not allow_partial,
+        )
+    )
     return {
         "ok": not issues,
         "keyword": keyword,
         "artifact_count": len(artifacts),
         "confirmed_url_count": len(confirmed_urls),
-        "image_count": len(manifest.get("images", [])),
+        "image_count": len(images),
         "issue_count": len(issues),
         "issues": [asdict(issue) for issue in issues],
     }

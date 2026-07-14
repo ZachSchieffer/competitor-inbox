@@ -105,7 +105,11 @@ evidence from local and automated runs can be compared directly.
 - Impact: all credential-free implementation and demo QA continued while the
   real Phase 1 backfill remained gated on the Keychain item.
 - Blocker duration: 10 minutes at the time of this entry.
-- Status: open.
+- Resolution: the dedicated inbox account had Workspace permission to enable
+  2-Step Verification, but 2-Step Verification was still off on that account.
+  Zach completed account-level enrollment, created a new app password, and the
+  safe probe passed TLS, authentication, and read-only mailbox examination.
+- Status: complete.
 
 ## 2026-07-14T10:10:46Z: Hook eligibility inherits the full source ledger
 
@@ -160,3 +164,144 @@ evidence from local and automated runs can be compared directly.
   filesystem writes also reject symlink roots, managed subdirectories, and
   sensitive file targets, with no-follow reads and lock opens.
 - Status: active.
+
+## 2026-07-14T11:02:00Z: Large IMAP windows require bounded batch fetching
+
+- Authority: execution order instruction to avoid waiting and continue after a
+  launch-critical step exceeds 10 minutes.
+- Decision: stop the first authenticated backfill after measuring 70,199 source
+  UIDs in the approved 12-month window, then replace 1-message-per-request
+  fetching with bounded read-only UID batches before restarting the full pass.
+- Reason: the serial adapter would take hours and add tens of thousands of
+  avoidable round trips. A bounded batch preserves the source definition,
+  privacy boundary, and read-only behavior while making same-session execution
+  practical.
+- Impact: 1,558 raw messages from the stopped attempt remain private outside
+  Git. The restarted pass reuses source identities and deduplication, and the
+  Early Data Gate is evaluated only after a complete source iteration.
+- Blocker duration: more than 10 minutes without a complete Phase 1 census.
+- Resolution: bounded batch fetching reduced the request count from 70,199 to
+  about 351, but Gmail still throttled the approximately 4 GB raw transfer.
+- Status: complete; superseded by the approved existing-export route below.
+
+## 2026-07-14T11:18:00Z: Checkpoint A uses the existing swipe-file export
+
+- Authority: execution-order override allowing the existing dedicated-inbox
+  export when it is faster than IMAP.
+- Decision: use the real Email Swipe File export from the existing landing-page
+  repository as the production census input for Checkpoint A. Keep the public
+  lead-magnet product capable of direct IMAP and mbox ingestion.
+- Reason: the export contains 1,249 real emails across 37 brands and spans July
+  2023 through July 2026. It can support the approved same-session launch while
+  a complete 70,199-message raw IMAP transfer cannot.
+- Impact: source completeness is labeled `Curated export`. No single-brand hook
+  can clear the complete-range requirement, so Checkpoint A must use a
+  multi-brand fallback with the export limitation stated. No export record or
+  asset enters the public competitor-inbox repository.
+- Early Data Gate: passed with 1,238 qualified broadcasts across 37 brands;
+  31 brands cleared 15 broadcasts across at least 45 observed days. The trusted
+  export window is July 11, 2023 through July 8, 2026. Nine lifecycle messages
+  and 2 uncertain messages remain outside broadcast metrics.
+- Status: active and cleared for Phase 2.
+
+## 2026-07-14T11:54:00Z: Curated annotations remain subordinate to evidence
+
+- Authority: numeric-claim and classification requirements.
+- Decision: deterministic evidence from sanitized subject, preheader, and
+  visible text wins over curated annotations. The importer may preserve a
+  nonnumeric offer, a recognized occasion, or an intent fallback, but it drops
+  every curated numeric depth unless the claimed source text contains it.
+- Reason: an export annotation can improve the census without becoming an
+  unsupported public claim.
+- Impact: all 642 offer classifications have visible evidence or a nonnumeric
+  curated offer; numeric offer summaries use deterministic evidence only.
+- Status: active.
+
+## 2026-07-14T11:55:00Z: Multi-brand fallback is the only eligible hook
+
+- Authority: Checkpoint A hook gate and curated-export provenance.
+- Decision: use `1,249 emails from 37 brands` as the source-level hook, then
+  disclose that 1,238 qualified broadcasts from 36 contributing brands power
+  the strategy metrics.
+- Reason: every brand record inherits `curated_export`, so no single brand has
+  a complete error-accounted source range even when it clears 30 broadcasts
+  and 90 observed days.
+- Impact: SKIMS, OLIPOP, Poppi, AG1, Liquid Death, and every other single-brand
+  candidate are disqualified. Huel and Nike are absent from the export.
+- Status: active.
+
+## 2026-07-14T11:56:00Z: Export caps cannot support volume-leader claims
+
+- Authority: claim accuracy requirement.
+- Decision: remove inbox-volume rankings from the Executive Brief and replace
+  them with global mix, offer, seasonal, and coverage findings.
+- Reason: many brands stop at exactly 40 records in the curated export, so a
+  apparent volume leader would describe the export cap rather than competitor
+  cadence.
+- Impact: the dashboard describes observed behavior and denominators without
+  implying that a capped sample identifies the most frequent sender.
+- Status: active.
+
+## 2026-07-14T11:57:00Z: Checkpoint A runs without optional AI processing
+
+- Authority: approved deterministic-only fallback.
+- Decision: freeze the real dashboard in `deterministic-only` mode because no
+  Anthropic API key was configured for this run.
+- Reason: classification, promotion, seasonality, coverage, and aggregation can
+  complete locally; unavailable AI-only analysis must not block launch.
+- Impact: the freeze manifest records a null model and deterministic-only mode.
+  The public product keeps the optional configurable classifier and private
+  cache path.
+- Status: active.
+
+## 2026-07-14T11:58:00Z: Manual QA clears the approved disagreement gate
+
+- Authority: Phase 2 QA requirements.
+- Decision: accept the deterministic census after reviewing 60 records across
+  31 brands, including 30 promotions.
+- Reason: 4 classification disagreements produce a 6.7% disagreement rate,
+  which is below the 10% limit. The promotion review found 0 unsupported
+  numeric claims, and the privacy review found 0 recipient or personalized
+  token leaks.
+- Impact: Phase 2 is cleared for Checkpoint A with the curated-export
+  limitation still attached to every finding.
+- Status: complete.
+
+## 2026-07-14T11:59:00Z: Hero screenshots fail closed on visual corruption
+
+- Authority: real screenshot and 1080 by 1350 readability requirements.
+- Decision: render 2 deterministic real-data candidates, audit their pixel
+  dimensions and black-row/light-pixel shares, and retry before failing the
+  build when a renderer produces a corrupt surface.
+- Reason: a technically created PNG is not sufficient proof that the launch
+  image is readable.
+- Impact: both selected candidates are 1080 by 1350, passed the automated
+  visual audit, and were inspected manually. The dashboard-style candidate is
+  preferred because it shows the product package as well as the census.
+- Status: complete.
+
+## 2026-07-14T12:00:00Z: Browser policy blocks local file navigation
+
+- Authority: implementation judgment and tool safety policy.
+- Decision: do not bypass the in-app browser's block on `file://` navigation.
+  Use static responsive tests, CSP/network assertions, screenshot rendering,
+  pixel audit, and manual image inspection for Checkpoint A instead.
+- Reason: the blocked navigation is a browser-tool security boundary, not a
+  dashboard runtime error.
+- Impact: local interactive desktop/mobile browser QA remains a disclosed
+  Checkpoint A weakness. It must be repeated through an approved local serving
+  route before Checkpoint B.
+- Status: active.
+
+## 2026-07-14T12:01:00Z: Final freeze binds to a clean immutable Git state
+
+- Authority: privacy audit, freeze, and Checkpoint A reproducibility rules.
+- Decision: scan the working tree, staged and untracked files, every reachable
+  Git blob, and unreachable Git objects before pushing. After the final commit,
+  rebuild the production dashboard so the manifest records the exact 40-digit
+  Git SHA and `git_dirty=false`.
+- Reason: deleting a sensitive file from the current tree would not remove it
+  from Git history or unreachable local objects.
+- Impact: Checkpoint A numbers, HTML, screenshots, census, and Git source state
+  can be tied to one immutable manifest.
+- Status: active until the final clean rebuild.

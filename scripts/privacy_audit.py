@@ -2,7 +2,8 @@
 """Redacted privacy audit for the public Competitor Inbox repository.
 
 The audit scans the live worktree, Git-untracked files, the staged index, and
-every blob reachable from every Git ref. Findings never include matched values.
+every blob in the Git object database, including unreachable objects. Findings
+never include matched values.
 Files ending in ``.example`` are reported separately as synthetic templates.
 """
 
@@ -263,23 +264,40 @@ def _nul_paths(payload: bytes) -> list[str]:
     ]
 
 
-def _reachable_blobs(repo: Path) -> Iterable[tuple[str, str, bytes]]:
-    output = _git(repo, ["rev-list", "--objects", "--all"], check=False)
-    seen: set[str] = set()
-    for line in output.splitlines():
+def _all_git_blobs(repo: Path) -> Iterable[tuple[str, str, str, bytes]]:
+    """Yield every reachable and unreachable blob with a redacted-safe label."""
+
+    reachable_output = _git(repo, ["rev-list", "--objects", "--all"])
+    reachable_paths: dict[str, str] = {}
+    for line in reachable_output.splitlines():
         if not line:
             continue
         oid_bytes, _, path_bytes = line.partition(b" ")
         oid = oid_bytes.decode("ascii", "replace")
-        if oid in seen:
+        if not oid:
             continue
-        seen.add(oid)
-        object_type = _git(repo, ["cat-file", "-t", oid], check=False).strip()
-        if object_type != b"blob":
+        path = path_bytes.decode("utf-8", "surrogateescape")
+        if path:
+            reachable_paths.setdefault(oid, path)
+
+    inventory = _git(
+        repo,
+        [
+            "cat-file",
+            "--batch-all-objects",
+            "--batch-check=%(objectname) %(objecttype)",
+        ],
+    )
+    for line in inventory.splitlines():
+        oid_bytes, _, type_bytes = line.partition(b" ")
+        if type_bytes.strip() != b"blob":
             continue
-        path = path_bytes.decode("utf-8", "surrogateescape") or f"<blob:{oid[:12]}>"
+        oid = oid_bytes.decode("ascii", "replace")
+        reachable = oid in reachable_paths
+        scope = "history" if reachable else "unreachable"
+        path = reachable_paths.get(oid, f"<unreachable-blob:{oid[:12]}>")
         data = _git(repo, ["cat-file", "-p", oid])
-        yield oid, path, data
+        yield scope, oid, path, data
 
 
 def scan_repository(repo: Path, deny_pattern_file: Path | None = None) -> dict[str, object]:
@@ -290,7 +308,13 @@ def scan_repository(repo: Path, deny_pattern_file: Path | None = None) -> dict[s
     deny_rules = _load_deny_rules(deny_pattern_file)
     all_findings: list[tuple[Finding, str | None]] = []
     assets: list[Asset] = []
-    scanned_counts = {"worktree": 0, "untracked": 0, "staged": 0, "history": 0}
+    scanned_counts = {
+        "worktree": 0,
+        "untracked": 0,
+        "staged": 0,
+        "history": 0,
+        "unreachable": 0,
+    }
 
     for relative, absolute in _walk_worktree(repo):
         scanned_counts["worktree"] += 1
@@ -373,11 +397,11 @@ def scan_repository(repo: Path, deny_pattern_file: Path | None = None) -> dict[s
         )
         assets.extend(found_assets)
 
-    for oid, relative, data in _reachable_blobs(repo):
-        scanned_counts["history"] += 1
+    for scope, oid, relative, data in _all_git_blobs(repo):
+        scanned_counts[scope] += 1
         found, found_assets = _scan_payload(
             data=data,
-            scope="history",
+            scope=scope,
             path=relative,
             blob_oid=oid,
             deny_rules=deny_rules,

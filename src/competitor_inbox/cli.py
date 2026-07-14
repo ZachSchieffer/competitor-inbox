@@ -24,7 +24,12 @@ from .config import (
     save_config,
 )
 from .coverage import assert_coverage_cross_foot, coverage_markdown
-from .dashboard import generate_dashboard, write_freeze_manifest, write_hero_candidates
+from .dashboard import (
+    generate_dashboard,
+    render_hero_pngs,
+    write_freeze_manifest,
+    write_hero_candidates,
+)
 from .demo import DEMO_QUADRANTS, demo_summary, generate_demo_records, write_demo_dataset
 from .keychain import has_password, prompt_store
 from .pipeline import analyze_private_store, dashboard_records, ingest, pipeline_result_json
@@ -57,14 +62,25 @@ def _print(value: object, *, as_json: bool = False) -> None:
         print(json.dumps(value, indent=2, sort_keys=True, default=str))
 
 
-def _git_sha() -> str:
-    result = subprocess.run(
+def _git_state() -> tuple[str, bool]:
+    repository = Path(__file__).resolve().parents[2]
+    revision = subprocess.run(
         ["git", "rev-parse", "HEAD"],
+        cwd=repository,
         check=False,
         capture_output=True,
         text=True,
     )
-    return result.stdout.strip() if result.returncode == 0 else "uncommitted"
+    if revision.returncode != 0:
+        return "", True
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=normal"],
+        cwd=repository,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return revision.stdout.strip(), status.returncode != 0 or bool(status.stdout.strip())
 
 
 def _pipeline_counts(result: Any) -> dict[str, int]:
@@ -99,7 +115,13 @@ def _bind_coverage_integrity(summary: dict[str, Any], result: Any) -> None:
             continue
         row_complete = coverage.source_completeness == "complete"
         brand["source_completeness"] = (
-            "complete" if globally_complete and row_complete else "partial"
+            "complete"
+            if globally_complete and row_complete
+            else (
+                coverage.source_completeness
+                if not row_complete
+                else total.source_completeness
+            )
         )
         brand["ingestion_errors"] = coverage.parse_failures + coverage.ingestion_errors
         brand["early_gate_ready"] = (
@@ -130,19 +152,24 @@ def _render_real(config: AppConfig, result: Any) -> dict[str, object]:
     }
     _bind_coverage_integrity(summary, result)
     verify_cross_foot(summary)
-    dashboard = generate_dashboard(summary, store.root / "outputs" / "dashboard.html")
     hero_paths = write_hero_candidates(summary, store.root / "outputs" / "heroes")
+    hero_screenshots = render_hero_pngs(hero_paths)
+    dashboard = generate_dashboard(summary, store.root / "outputs" / "dashboard.html")
     atomic_write_json(store.root / "outputs" / "census.json", summary)
+    git_sha, git_dirty = _git_state()
     freeze = write_freeze_manifest(
         summary,
         dashboard,
         hero_paths,
         store.root / "outputs" / "freeze-manifest.json",
-        git_sha=_git_sha(),
+        screenshot_paths=hero_screenshots,
+        git_sha=git_sha,
+        git_dirty=git_dirty,
     )
     return {
         "dashboard": str(dashboard),
         "hero_candidates": [str(path) for path in hero_paths],
+        "hero_screenshots": [str(path) for path in hero_screenshots],
         "freeze_manifest": str(freeze),
         "broadcasts": summary["broadcast_count"],
         "brands": summary["brand_count"],
@@ -272,12 +299,14 @@ def command_demo(args: argparse.Namespace) -> int:
     atomic_write_json(summary_path, summary)
     dashboard = generate_dashboard(summary, root / "dashboard.html")
     heroes = write_hero_candidates(summary, root / "heroes")
+    git_sha, git_dirty = _git_state()
     freeze = write_freeze_manifest(
         summary,
         dashboard,
         heroes,
         root / "freeze-manifest.json",
-        git_sha=_git_sha(),
+        git_sha=git_sha,
+        git_dirty=git_dirty,
     )
     _print(
         {

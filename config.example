@@ -17,6 +17,8 @@ mailbox = "INBOX"
 keychain_service = "competitor-inbox-imap"
 backfill_months = 12
 overlap_days = 14
+# Fetches multiple UIDs per read-only BODY.PEEK request. Keep between 1 and 500.
+fetch_batch_size = 200
 
 [filters]
 sender_domains = []

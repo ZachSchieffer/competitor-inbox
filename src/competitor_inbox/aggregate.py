@@ -15,6 +15,7 @@ from .analysis import (
     quadrant_for,
     sanitize_ai_text,
 )
+from .schema import SourceCompleteness
 
 
 class CrossFootError(ValueError):
@@ -286,7 +287,23 @@ def aggregate_records(
             for record in brand_records
         )
         missing_dates = len(brand_broadcasts) - len(brand_dates)
-        completeness = "complete" if parse_errors == 0 and missing_dates == 0 else "partial"
+        curated_export = any(
+            str(
+                _get(
+                    record,
+                    "source_completeness",
+                    default=SourceCompleteness.COMPLETE.value,
+                )
+            )
+            == SourceCompleteness.CURATED_EXPORT.value
+            for record in brand_records
+        )
+        if parse_errors or missing_dates:
+            completeness = "partial"
+        elif curated_export:
+            completeness = SourceCompleteness.CURATED_EXPORT.value
+        else:
+            completeness = SourceCompleteness.COMPLETE.value
         numeric_offers = [
             float(depth)
             for record in brand_broadcasts
@@ -357,6 +374,9 @@ def aggregate_records(
         },
         "broadcast_count": len(broadcasts),
         "brand_count": len(by_brand),
+        "broadcast_brand_count": sum(
+            bool(row["qualified_broadcasts"]) for row in brand_rows
+        ),
         "quadrants": quadrant_rows,
         "intent_counts": dict(sorted(intent_counts.items(), key=lambda item: (-item[1], item[0]))),
         "overall_posture": assign_posture(intent_counts),
@@ -415,38 +435,100 @@ def build_findings(summary: Mapping[str, Any]) -> list[dict[str, Any]]:
     broadcasts = int(summary.get("broadcast_count", 0))
     brands = summary.get("brands", [])
     quadrants = {row["name"]: row for row in summary.get("quadrants", [])}
+    observed_days = int(_get(summary, "metadata.observed_days", default=0) or 0)
+    brand_set = sorted(
+        (
+            str(row.get("brand") or "")
+            for row in brands
+            if int(row.get("qualified_broadcasts", 0) or 0) > 0
+            and str(row.get("brand") or "")
+        ),
+        key=str.casefold,
+    )
     date_range = {
         "first": _get(summary, "metadata.first_observed", default=""),
         "last": _get(summary, "metadata.last_observed", default=""),
     }
-    findings: list[dict[str, Any]] = []
-    if brands:
-        leader = brands[0]
-        findings.append(
-            {
-                "label": "Highest inbox volume",
-                "value": leader["brand"],
-                "numerator": leader["qualified_broadcasts"],
-                "denominator": broadcasts,
-                "date_range": date_range,
-            }
+    coverage_gate = {
+        "name": "cadence_mix_posture",
+        "minimum_observed_days": 90,
+        "observed_days": observed_days,
+        "passed": observed_days >= 90,
+        "coverage": dict(_get(summary, "metadata.coverage", default={}) or {}),
+    }
+    limitation = (
+        "Observed inbox activity shows competitor behavior, not revenue, conversion, "
+        "margin, or which message performed best."
+    )
+    def finding(
+        label: str,
+        numerator: int,
+        denominator: int,
+        *,
+        included_brands: list[str] | None = None,
+        gate: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        percentage = 100 * numerator / denominator if denominator else 0.0
+        return {
+            "label": label,
+            "value": f"{percentage:.1f}%",
+            "numerator": numerator,
+            "denominator": denominator,
+            "date_range": date_range,
+            "brand_set": included_brands if included_brands is not None else brand_set,
+            "limitation": limitation,
+            "coverage_gate": dict(gate or coverage_gate),
+        }
+
+    evergreen = int(quadrants.get("Evergreen content", {}).get("count", 0))
+    everyday_promotion = int(
+        quadrants.get("Everyday promotion", {}).get("count", 0)
+    )
+    seasonal_promotion = int(
+        quadrants.get("Seasonal promotion", {}).get("count", 0)
+    )
+    seasonal_content = int(quadrants.get("Seasonal content", {}).get("count", 0))
+    seasonal_total = seasonal_promotion + seasonal_content
+    promotion_total = everyday_promotion + seasonal_promotion
+
+    findings = [
+        finding("Evergreen content share", evergreen, broadcasts),
+        finding("Promotion share", promotion_total, broadcasts),
+        finding("Seasonal share", seasonal_total, broadcasts),
+        finding(
+            "Seasonal messages carrying an offer",
+            seasonal_promotion,
+            seasonal_total,
+        ),
+    ]
+
+    cadence_brands = sorted(
+        (
+            str(row.get("brand") or "")
+            for row in brands
+            if int(row.get("qualified_broadcasts", 0) or 0) >= 30
+            and int(row.get("observed_days", 0) or 0) >= 90
+            and str(row.get("brand") or "")
+        ),
+        key=str.casefold,
+    )
+    brand_count = int(summary.get("brand_count", len(brands)) or 0)
+    findings.append(
+        finding(
+            "Brands with cadence and mix coverage",
+            len(cadence_brands),
+            brand_count,
+            included_brands=cadence_brands,
+            gate={
+                "name": "brand_cadence_mix",
+                "minimum_qualified_broadcasts": 30,
+                "minimum_observed_days": 90,
+                "qualifying_brands": len(cadence_brands),
+                "total_brands": brand_count,
+                "passed": bool(cadence_brands),
+            },
         )
-    for name, label in (
-        ("Evergreen content", "Evergreen content share"),
-        ("Everyday promotion", "Everyday promotion share"),
-        ("Seasonal promotion", "Seasonal promotion share"),
-        ("Seasonal content", "Seasonal content share"),
-    ):
-        row = quadrants.get(name, {"count": 0, "percentage": 0})
-        findings.append(
-            {
-                "label": label,
-                "value": f"{row['percentage']:.1f}%",
-                "numerator": row["count"],
-                "denominator": broadcasts,
-                "date_range": date_range,
-            }
-        )
+    )
     return findings[:5]
 
 

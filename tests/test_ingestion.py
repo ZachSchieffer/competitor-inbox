@@ -26,7 +26,13 @@ from competitor_inbox.dashboard import render_dashboard
 from competitor_inbox.parser import parse_envelope
 from competitor_inbox.pipeline import dashboard_records
 from competitor_inbox.sanitize import contains_direct_identifier, sanitize_text
-from competitor_inbox.schema import MessageScope, NormalizedMessage, SourceEnvelope, isoformat_utc
+from competitor_inbox.schema import (
+    MessageScope,
+    NormalizedMessage,
+    SourceCompleteness,
+    SourceEnvelope,
+    isoformat_utc,
+)
 from competitor_inbox.sources.imap import (
     ImapConfig,
     ImapSource,
@@ -114,6 +120,33 @@ def test_sanitizer_and_parser_remove_identifiers_and_classify_scope() -> None:
     assert lifecycle.scope == MessageScope.LIFECYCLE.value
     assert lifecycle.scope_reason == "lifecycle:transactional"
     assert "reader@recipient.example" not in sanitize_text("reader@recipient.example")
+
+
+def test_source_completeness_is_strict_propagated_and_persisted(tmp_path: Path) -> None:
+    complete_envelope = envelope(raw_message(), uid="provenance-complete")
+    curated_envelope = replace(
+        envelope(raw_message(), uid="provenance-curated"),
+        source_completeness=SourceCompleteness.CURATED_EXPORT.value,
+    )
+
+    complete = parse_envelope(complete_envelope)
+    curated = parse_envelope(curated_envelope)
+    store = MasterStore(tmp_path / "private")
+    store.save([complete, curated])
+    loaded = {record.source_uid: record for record in store.load()}
+
+    assert complete_envelope.source_completeness == SourceCompleteness.COMPLETE.value
+    assert complete.source_completeness == SourceCompleteness.COMPLETE.value
+    assert curated.source_completeness == SourceCompleteness.CURATED_EXPORT.value
+    assert loaded["provenance-complete"].source_completeness == "complete"
+    assert loaded["provenance-curated"].source_completeness == "curated_export"
+
+    with pytest.raises(ValueError, match="source_completeness"):
+        replace(complete_envelope, source_completeness="unknown")
+    invalid_record = curated.to_dict()
+    invalid_record["source_completeness"] = "unknown"
+    with pytest.raises(ValueError, match="source_completeness"):
+        NormalizedMessage.from_dict(invalid_record)
 
 
 def test_four_level_dedupe_preserves_variants() -> None:
@@ -298,6 +331,47 @@ def test_coverage_cross_foot_and_early_gate() -> None:
     failed = evaluate_early_data_gate(build_coverage_table(records[:299]))
     assert not failed.passed
     assert any("below 300" in reason for reason in failed.reasons)
+
+
+def test_curated_export_passes_early_gate_without_becoming_hook_eligible() -> None:
+    records = [
+        replace(
+            synthetic_record(index),
+            canonical_received_at=isoformat_utc(NOW - timedelta(days=index % 120)),
+            source_completeness=SourceCompleteness.CURATED_EXPORT.value,
+        )
+        for index in range(300)
+    ]
+
+    table = build_coverage_table(records)
+    gate = evaluate_early_data_gate(table)
+    summary = aggregate_records(dashboard_records(records))
+
+    assert gate.passed is True
+    assert table.total.parse_failures == 0
+    assert table.total.ingestion_errors == 0
+    assert table.total.source_completeness == "curated_export"
+    assert table.rows[0].source_completeness == "curated_export"
+    assert table.rows[0].hook_gate_status != "eligible"
+    assert summary["early_data_gate"]["passed"] is True
+    assert summary["brands"][0]["source_completeness"] == "curated_export"
+    assert summary["brands"][0]["ingestion_errors"] == 0
+    assert summary["brands"][0]["hook_eligible"] is False
+
+
+def test_dedupe_preserves_the_more_conservative_source_provenance() -> None:
+    complete = synthetic_record(1)
+    curated_variant = replace(
+        complete,
+        id="curated-variant",
+        source_completeness=SourceCompleteness.CURATED_EXPORT.value,
+        variant_ids=["curated-variant"],
+    )
+
+    report = deduplicate_messages([complete, curated_variant])
+
+    assert report.distinct_count == 1
+    assert report.messages[0].source_completeness == "curated_export"
 
 
 def test_store_refuses_git_worktree_and_uses_private_modes(tmp_path: Path) -> None:
@@ -508,6 +582,7 @@ def test_mbox_file_mtime_fallback_is_recorded_as_untrusted(tmp_path: Path) -> No
 
     assert envelope_value.received_at_source == "file_mtime_untrusted"
     assert envelope_value.received_at_trusted is False
+    assert envelope_value.source_completeness == SourceCompleteness.COMPLETE.value
     assert record.received_at_source == "file_mtime_untrusted"
     assert record.received_at_trusted is False
 
@@ -558,6 +633,44 @@ class FakeImapConnection:
     def logout(self) -> tuple[str, list[bytes]]:
         self.calls.append(("logout",))
         return "BYE", []
+
+
+def batch_fetch_item(uid: int, *, raw: bytes | None = None) -> tuple[bytes, bytes]:
+    metadata = (
+        f'{uid} (UID {uid} INTERNALDATE "14-Jul-2026 08:00:00 +0000" '
+        "X-GM-LABELS ())"
+    ).encode("ascii")
+    return metadata, raw or raw_message(message_id=f"<campaign-{uid}@northstar.example>")
+
+
+class BatchedImapConnection(FakeImapConnection):
+    def __init__(
+        self,
+        *,
+        search_uids: bytes = b"103 101 102 102",
+        malformed: bool = False,
+        partial: bool = False,
+    ) -> None:
+        super().__init__()
+        self.search_uids = search_uids
+        self.malformed = malformed
+        self.partial = partial
+
+    def uid(self, command: str, *args: object) -> tuple[str, list[object]]:
+        self.calls.append(("uid", command, *args))
+        if command == "search":
+            return "OK", [self.search_uids]
+        requested = [int(value) for value in str(args[0]).split(",")]
+        if self.partial:
+            requested = requested[:1]
+        response: list[object] = []
+        for uid in reversed(requested):
+            metadata, raw = batch_fetch_item(uid)
+            item: object = (metadata, raw)
+            if self.malformed and uid == requested[-1]:
+                item = (metadata, "not-bytes")
+            response.extend((item, b")"))
+        return "OK", response
 
 
 class AbortingImapConnection(FakeImapConnection):
@@ -612,6 +725,7 @@ def test_imap_adapter_is_read_only_uid_based_and_tracks_uidvalidity() -> None:
 
     assert len(messages) == 1
     assert messages[0].uidvalidity == "77"
+    assert messages[0].source_completeness == SourceCompleteness.COMPLETE.value
     assert ("select", "INBOX", True) in connection.calls
     fetch_call = next(call for call in connection.calls if call[:2] == ("uid", "fetch"))
     assert "BODY.PEEK[]" in str(fetch_call)
@@ -692,3 +806,73 @@ def test_imap_adapter_reconnects_after_expired_session() -> None:
 
     assert len(list(source.iter_messages(since=NOW - timedelta(days=1)))) == 1
     assert ("select", "INBOX", True) in second.calls
+
+
+def test_imap_adapter_fetches_complete_batches_in_stable_uid_order() -> None:
+    connection = BatchedImapConnection()
+    source = ImapSource(
+        ImapConfig(username="archive@inbox.example", fetch_batch_size=2),
+        credential_store=FakeCredentialStore(),  # type: ignore[arg-type]
+        connection_factory=lambda *args, **kwargs: connection,  # type: ignore[arg-type]
+    )
+
+    messages = list(source.iter_messages(since=NOW - timedelta(days=1)))
+    fetch_calls = [call for call in connection.calls if call[:2] == ("uid", "fetch")]
+
+    assert [message.source_uid for message in messages] == ["101", "102", "103"]
+    assert [call[2] for call in fetch_calls] == ["101,102", "103"]
+    assert all("BODY.PEEK[]" in str(call) for call in fetch_calls)
+
+
+def test_imap_adapter_retries_partial_batch_atomically_without_duplicates() -> None:
+    first = BatchedImapConnection(search_uids=b"101 102", partial=True)
+    second = BatchedImapConnection(search_uids=b"101 102")
+    connections = iter((first, second))
+    source = ImapSource(
+        ImapConfig(
+            username="archive@inbox.example",
+            fetch_batch_size=2,
+            max_retries=1,
+        ),
+        credential_store=FakeCredentialStore(),  # type: ignore[arg-type]
+        connection_factory=lambda *args, **kwargs: next(connections),  # type: ignore[arg-type]
+    )
+
+    messages = list(source.iter_messages(since=NOW - timedelta(days=1)))
+
+    assert [message.source_uid for message in messages] == ["101", "102"]
+    assert len([call for call in first.calls if call[:2] == ("uid", "fetch")]) == 1
+    assert len([call for call in second.calls if call[:2] == ("uid", "fetch")]) == 1
+
+
+def test_imap_adapter_rejects_malformed_batch_without_yielding() -> None:
+    connection = BatchedImapConnection(search_uids=b"101 102", malformed=True)
+    source = ImapSource(
+        ImapConfig(
+            username="archive@inbox.example",
+            fetch_batch_size=2,
+            max_retries=0,
+        ),
+        credential_store=FakeCredentialStore(),  # type: ignore[arg-type]
+        connection_factory=lambda *args, **kwargs: connection,  # type: ignore[arg-type]
+    )
+
+    yielded: list[SourceEnvelope] = []
+    with pytest.raises(ImapSourceError) as raised:
+        yielded.extend(source.iter_messages(since=NOW - timedelta(days=1)))
+
+    assert raised.value.safe_code == "imap_fetch_failed"
+    assert yielded == []
+
+
+@pytest.mark.parametrize("size", [1, 500])
+def test_imap_fetch_batch_size_accepts_safe_boundaries(size: int) -> None:
+    config = ImapConfig(username="archive@inbox.example", fetch_batch_size=size)
+
+    assert config.fetch_batch_size == size
+
+
+@pytest.mark.parametrize("size", [0, 501, True, 1.5])
+def test_imap_fetch_batch_size_rejects_unsafe_values(size: object) -> None:
+    with pytest.raises(ValueError, match="fetch_batch_size"):
+        ImapConfig(username="archive@inbox.example", fetch_batch_size=size)  # type: ignore[arg-type]

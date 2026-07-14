@@ -14,10 +14,13 @@ from competitor_inbox.aggregate import (
 from competitor_inbox.analysis import (
     AnthropicIntentClassifier,
     analyze_message,
+    analyze_normalized_messages,
     classify_seasonality,
     extract_offers,
+    numeric_offer_is_supported,
 )
 from competitor_inbox.demo import DEMO_QUADRANTS, demo_summary, generate_demo_records
+from competitor_inbox.schema import NormalizedMessage, SourceCompleteness
 
 
 def test_numeric_offer_requires_context_and_retains_exact_evidence() -> None:
@@ -66,6 +69,220 @@ def test_seasonality_requires_language_and_uses_date_only_to_confirm() -> None:
 
     wrong_window = classify_seasonality("Summer collection preview", "", "", "2025-12-10")
     assert wrong_window["seasonal"] is False
+
+
+def test_curated_export_preserves_nonnumeric_annotations_in_canonical_records() -> None:
+    curated_offer = {
+        "type": "bundle",
+        "depth": None,
+        "unit": "other",
+        "source": "manual",
+        "evidence": "curated column",
+        "confidence": 0.9,
+        "deterministic": False,
+    }
+    record = NormalizedMessage(
+        id="curated-annotations",
+        source_type="curated_export",
+        source_uid="1",
+        canonical_received_at="2026-02-01T08:00:00Z",
+        brand="Alder Row",
+        sender_name="Alder Row",
+        sender_domain="alder-row.test",
+        subject="The weekly edit",
+        preheader="A few current favorites",
+        visible_text="Browse the latest pieces.",
+        content_hash="curated-annotations-hash",
+        scope="broadcast",
+        scope_reason="curated_export",
+        scope_confidence=1.0,
+        intent="Founder/brand story",
+        intent_source="manual",
+        intent_confidence=0.9,
+        offer_candidates=[curated_offer],
+        primary_offer=curated_offer,
+        seasonal=True,
+        occasion="Black Friday",
+    )
+
+    analyzed = analyze_normalized_messages([record])[0]
+
+    assert record.source_completeness == SourceCompleteness.CURATED_EXPORT.value
+    assert analyzed.primary_offer == {
+        "type": "bundle",
+        "depth": None,
+        "unit": "other",
+        "source": "curated_export",
+        "evidence": "",
+        "confidence": 0.9,
+        "deterministic": False,
+    }
+    assert analyzed.offer_candidates == [analyzed.primary_offer]
+    assert analyzed.seasonal is True
+    assert analyzed.occasion == "Black Friday"
+    assert analyzed.intent == "Promotion/offer"
+    assert analyzed.intent_source == "curated_export"
+
+
+def test_curated_intent_survives_only_without_an_offer() -> None:
+    analyzed = analyze_message(
+        {
+            "source_type": "curated_export",
+            "scope": "broadcast",
+            "subject": "The weekly edit",
+            "visible_text": "Browse the latest pieces.",
+            "canonical_received_at": "2026-02-01T08:00:00Z",
+            "intent": "Founder/brand story",
+            "intent_source": "manual",
+            "intent_confidence": 0.92,
+            "seasonal": True,
+            "occasion": "Unrecognized retail moment",
+        }
+    )
+
+    assert analyzed["offer"]["present"] is False
+    assert analyzed["seasonality"]["seasonal"] is False
+    assert analyzed["intent"] == {
+        "label": "Founder/brand story",
+        "source": "curated_export",
+        "confidence": 0.92,
+    }
+
+
+def test_deterministic_intent_overrides_curated_intent() -> None:
+    analyzed = analyze_message(
+        {
+            "source_type": "curated_export",
+            "scope": "broadcast",
+            "subject": "Introducing our newest launch",
+            "visible_text": "Meet the new collection.",
+            "canonical_received_at": "2026-02-01T08:00:00Z",
+            "intent": "Founder/brand story",
+            "intent_source": "manual",
+            "intent_confidence": 0.95,
+        }
+    )
+
+    assert analyzed["intent"] == {
+        "label": "New product launch",
+        "source": "deterministic",
+        "confidence": 0.9,
+    }
+
+
+def test_curated_numeric_annotations_never_create_numeric_claims() -> None:
+    curated_numeric = {
+        "type": "%off",
+        "depth": 40.0,
+        "unit": "percent",
+        "source": "subject",
+        "evidence": "Save 40%",
+        "confidence": 1.0,
+        "deterministic": True,
+    }
+    record = {
+        "source_type": "curated_export",
+        "scope": "broadcast",
+        "subject": "The weekly edit",
+        "visible_text": "Browse the latest pieces.",
+        "canonical_received_at": "2026-02-01T08:00:00Z",
+        "intent": "Ingredient/education",
+        "primary_offer": curated_numeric,
+        "offer_candidates": [curated_numeric],
+    }
+
+    analyzed = analyze_message(record)
+    deterministic_override = analyze_message({**record, "subject": "Save 25% today"})
+
+    assert analyzed["offer"]["present"] is False
+    assert analyzed["offer"]["primary"] is None
+    assert analyzed["offer"]["candidates"] == []
+    assert "40.0" not in json.dumps(analyzed, sort_keys=True)
+    assert analyzed["intent"]["label"] == "Ingredient/education"
+    assert deterministic_override["offer"]["primary"]["depth"] == 25.0
+    assert deterministic_override["offer"]["primary"]["source"] == "subject"
+    assert all(
+        candidate.get("depth") != 40.0
+        for candidate in deterministic_override["offer"]["candidates"]
+    )
+    assert numeric_offer_is_supported(
+        {
+            "offer": {
+                "primary": {"type": "bundle", "depth": None},
+                "candidates": [curated_numeric],
+            }
+        }
+    ) is False
+
+
+def test_deterministic_offer_and_seasonality_override_curated_annotations() -> None:
+    analyzed = analyze_message(
+        {
+            "source_type": "curated_export",
+            "scope": "broadcast",
+            "subject": "Cyber Monday: Save 20% today",
+            "visible_text": "The offer ends tonight.",
+            "canonical_received_at": "2026-11-30T08:00:00Z",
+            "intent": "Founder/brand story",
+            "offer_candidates": [
+                {
+                    "type": "bundle",
+                    "depth": None,
+                    "source": "manual",
+                }
+            ],
+            "seasonal": True,
+            "occasion": "Black Friday",
+        }
+    )
+
+    assert analyzed["offer"]["primary"]["depth"] == 20.0
+    assert analyzed["offer"]["primary"]["source"] == "subject"
+    assert analyzed["offer"]["analysis_mode"] == "deterministic"
+    assert analyzed["seasonality"]["occasion"] == "Cyber Monday"
+    assert analyzed["seasonality"]["source"] == "subject"
+    assert analyzed["intent"]["label"] == "Promotion/offer"
+    assert analyzed["intent"]["source"] == "deterministic"
+
+
+def test_imap_records_do_not_inherit_curated_annotations() -> None:
+    analyzed = analyze_message(
+        {
+            "source_type": "imap",
+            "scope": "broadcast",
+            "subject": "The weekly edit",
+            "visible_text": "Browse the latest pieces.",
+            "canonical_received_at": "2026-02-01T08:00:00Z",
+            "intent": "Founder/brand story",
+            "offer_candidates": [
+                {
+                    "type": "bundle",
+                    "depth": None,
+                    "source": "manual",
+                }
+            ],
+            "seasonal": True,
+            "occasion": "Black Friday",
+        }
+    )
+
+    assert analyzed["offer"]["present"] is False
+    assert analyzed["seasonality"]["seasonal"] is False
+    assert analyzed["intent"]["label"] == "Featured products"
+    assert analyzed["intent"]["source"] == "deterministic"
+
+    deterministic_offer = analyze_message(
+        {
+            "source_type": "imap",
+            "scope": "broadcast",
+            "subject": "Save 25% today",
+            "visible_text": "The offer ends tonight.",
+            "canonical_received_at": "2026-02-01T08:00:00Z",
+        }
+    )
+    assert deterministic_offer["offer"]["primary"]["depth"] == 25.0
+    assert deterministic_offer["offer"]["primary"]["source"] == "subject"
+    assert deterministic_offer["intent"]["label"] == "Promotion/offer"
 
 
 def test_scope_keeps_lifecycle_out_of_broadcast_metrics() -> None:

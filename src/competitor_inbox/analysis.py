@@ -135,6 +135,18 @@ _SEASON_MONTHS = {
     "autumn": {9, 10, 11},
     "winter": {12, 1, 2},
 }
+_CURATED_SOURCE_TYPE = "curated_export"
+_CURATED_OCCASIONS = {
+    value.casefold(): value
+    for value in (
+        *(occasion for occasion, _ in _OCCASION_PATTERNS),
+        "Spring",
+        "Summer",
+        "Fall",
+        "Winter",
+    )
+}
+_INTENT_BY_KEY = {value.casefold(): value for value in INTENT_TYPES}
 
 _INTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -438,6 +450,106 @@ def extract_offers(subject: Any, preheader: Any, visible_text: Any) -> dict[str,
     }
 
 
+def _bounded_confidence(value: Any, *, default: float) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _curated_offer_fallback(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Keep only typed, nonnumeric curated offers when text has no offer evidence."""
+
+    values: list[Mapping[str, Any]] = []
+    for name in ("offer.primary", "primary_offer"):
+        value = _record_value(record, name, default=None)
+        if isinstance(value, Mapping):
+            values.append(value)
+    for name in ("offer.candidates", "offer_candidates"):
+        value = _record_value(record, name, default=[])
+        if isinstance(value, (list, tuple)):
+            values.extend(item for item in value if isinstance(item, Mapping))
+
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for value in values:
+        offer_type = str(value.get("type") or "").strip().casefold()
+        if (
+            offer_type not in OFFER_TYPES
+            or value.get("depth") is not None
+            or offer_type in seen
+        ):
+            continue
+        seen.add(offer_type)
+        candidates.append(
+            {
+                "type": offer_type,
+                "depth": None,
+                "unit": "other",
+                "source": _CURATED_SOURCE_TYPE,
+                "evidence": "",
+                "confidence": _bounded_confidence(
+                    value.get("confidence"), default=0.8
+                ),
+                "deterministic": False,
+            }
+        )
+    if not candidates:
+        return None
+    return {
+        "present": True,
+        "primary": copy.deepcopy(candidates[0]),
+        "candidates": candidates,
+        "numeric_supported": False,
+        "analysis_mode": "curated_fallback",
+    }
+
+
+def _curated_seasonality_fallback(
+    record: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if _record_value(record, "seasonality.seasonal", "seasonal", default=False) is not True:
+        return None
+    raw_occasion = str(
+        _record_value(record, "seasonality.occasion", "occasion", default="")
+    ).strip()
+    occasion = _CURATED_OCCASIONS.get(raw_occasion.casefold())
+    if not occasion:
+        return None
+    confidence = _record_value(
+        record,
+        "seasonality.confidence",
+        default=0.8,
+    )
+    return {
+        "seasonal": True,
+        "occasion": occasion,
+        "source": _CURATED_SOURCE_TYPE,
+        "evidence": "",
+        "confidence": _bounded_confidence(confidence, default=0.8),
+    }
+
+
+def _curated_intent(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    raw_intent = str(
+        _record_value(record, "intent.label", "intent", default="")
+    ).strip()
+    label = _INTENT_BY_KEY.get(raw_intent.casefold())
+    if not label:
+        return None
+    confidence = _record_value(
+        record,
+        "intent.confidence",
+        "intent_confidence",
+        default=0.8,
+    )
+    return {
+        "label": label,
+        "source": _CURATED_SOURCE_TYPE,
+        "confidence": _bounded_confidence(confidence, default=0.8),
+    }
+
+
 def _parse_date(value: Any) -> date | None:
     if isinstance(value, datetime):
         return value.date()
@@ -534,10 +646,35 @@ def quadrant_for(offer_present: bool, seasonal: bool) -> str:
 
 
 def numeric_offer_is_supported(record: Mapping[str, Any]) -> bool:
-    primary = _record_value(record, "offer.primary", default=None)
-    if not isinstance(primary, Mapping) or primary.get("depth") is None:
-        return True
-    return bool(primary.get("deterministic") and primary.get("evidence") and primary.get("source") in {"subject", "preheader", "visible_text"})
+    nested_offer = record.get("offer")
+    if isinstance(nested_offer, Mapping):
+        primary = nested_offer.get("primary")
+        candidates = nested_offer.get("candidates", [])
+    else:
+        primary = record.get("primary_offer")
+        candidates = record.get("offer_candidates", [])
+    values: list[Mapping[str, Any]] = []
+    if isinstance(primary, Mapping):
+        values.append(primary)
+    if isinstance(candidates, (list, tuple)):
+        values.extend(value for value in candidates if isinstance(value, Mapping))
+    for value in values:
+        if value.get("depth") is None:
+            continue
+        source = str(value.get("source") or "")
+        evidence = str(value.get("evidence") or "").strip()
+        if (
+            not value.get("deterministic")
+            or source not in {"subject", "preheader", "visible_text"}
+            or not evidence
+        ):
+            return False
+        field_value = str(
+            _record_value(record, f"sanitized.{source}", source, default="")
+        )
+        if evidence.casefold() not in field_value.casefold():
+            return False
+    return True
 
 
 def analyze_message(
@@ -562,6 +699,20 @@ def analyze_message(
     offer = extract_offers(subject, preheader, body)
     seasonality = classify_seasonality(subject, preheader, body, observed_at)
     intent = classify_intent(subject, preheader, body, offer)
+    deterministic_intent_is_fallback = (
+        intent.get("label") == "Featured products"
+        and intent.get("source") == "deterministic"
+        and intent.get("confidence") == 0.7
+    )
+    curated_export = (
+        str(_record_value(record, "source_type", default="")).strip().casefold()
+        == _CURATED_SOURCE_TYPE
+    )
+    curated_intent = _curated_intent(record) if curated_export else None
+    if curated_export and not offer["present"]:
+        offer = _curated_offer_fallback(record) or offer
+    if curated_export and not seasonality["seasonal"]:
+        seasonality = _curated_seasonality_fallback(record) or seasonality
 
     ai_result: Mapping[str, Any] | None = None
     if classifier is not None and scope == "broadcast":
@@ -601,12 +752,51 @@ def analyze_message(
             if intent["label"] != "Promotion/offer":
                 intent = {**intent, "label": "Promotion/offer"}
 
+    if curated_export:
+        if offer["present"]:
+            primary = offer.get("primary")
+            primary_source = (
+                str(primary.get("source") or "")
+                if isinstance(primary, Mapping)
+                else ""
+            )
+            intent_source = (
+                primary_source
+                if primary_source in {_CURATED_SOURCE_TYPE, "ai"}
+                else "deterministic"
+            )
+            confidence = (
+                _bounded_confidence(primary.get("confidence"), default=1.0)
+                if isinstance(primary, Mapping)
+                else 1.0
+            )
+            intent = {
+                "label": "Promotion/offer",
+                "source": intent_source,
+                "confidence": confidence,
+            }
+        elif curated_intent and not ai_result and deterministic_intent_is_fallback:
+            intent = curated_intent
+
     result["scope"] = scope
     result["offer"] = offer
     result["seasonality"] = seasonality
     result["intent"] = intent
     result["quadrant"] = quadrant_for(bool(offer["present"]), bool(seasonality["seasonal"]))
     result["analysis_mode"] = "ai+deterministic" if ai_result else "deterministic-only"
+    if curated_export:
+        # Replace the flat canonical annotations too, so a rejected curated
+        # number cannot survive beside the authoritative nested analysis.
+        result["offer_candidates"] = [
+            copy.deepcopy(value) for value in offer.get("candidates", [])
+        ]
+        result["primary_offer"] = (
+            copy.deepcopy(offer.get("primary")) if offer.get("primary") else None
+        )
+        result["seasonal"] = bool(seasonality["seasonal"])
+        result["occasion"] = str(seasonality.get("occasion") or "") or None
+        result["intent_source"] = str(intent.get("source") or "") or None
+        result["intent_confidence"] = float(intent.get("confidence") or 0.0)
     if not numeric_offer_is_supported(result):
         raise ValueError("Numeric promotion claim has no deterministic source evidence")
     return dict(result)

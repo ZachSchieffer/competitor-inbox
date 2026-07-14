@@ -22,6 +22,22 @@ class MessageScope(str, Enum):
     UNCERTAIN = "uncertain"
 
 
+class SourceCompleteness(str, Enum):
+    """Whether a record came from a complete source window or an approved subset."""
+
+    COMPLETE = "complete"
+    CURATED_EXPORT = "curated_export"
+
+
+def normalize_source_completeness(value: str | SourceCompleteness) -> str:
+    try:
+        return SourceCompleteness(value).value
+    except (TypeError, ValueError):
+        raise ValueError(
+            "source_completeness must be complete or curated_export"
+        ) from None
+
+
 def normalize_source_mailbox(value: str | None) -> str:
     """Return the stable mailbox namespace used by every source identity key."""
 
@@ -59,8 +75,19 @@ class SourceEnvelope:
     canonical_received_at: datetime
     received_at_source: str = "source_provided"
     received_at_trusted: bool = True
+    source_completeness: str = SourceCompleteness.COMPLETE.value
     mailbox: str = "INBOX"
     uidvalidity: str | None = None
+
+    def __post_init__(self) -> None:
+        normalized_completeness = normalize_source_completeness(
+            self.source_completeness
+        )
+        self.source_completeness = (
+            SourceCompleteness.CURATED_EXPORT.value
+            if str(self.source_type).strip().casefold() == "curated_export"
+            else normalized_completeness
+        )
 
     @property
     def identity_key(self) -> tuple[str, str, str | None, str]:
@@ -115,6 +142,7 @@ class NormalizedMessage:
     date_skew_days: float | None = None
     received_at_source: str = "source_provided"
     received_at_trusted: bool = True
+    source_completeness: str = SourceCompleteness.COMPLETE.value
     variant_count: int = 1
     variant_ids: list[str] = field(default_factory=list)
     parse_status: str = "parsed"
@@ -130,6 +158,14 @@ class NormalizedMessage:
     classification_model: str | None = None
 
     def __post_init__(self) -> None:
+        normalized_completeness = normalize_source_completeness(
+            self.source_completeness
+        )
+        self.source_completeness = (
+            SourceCompleteness.CURATED_EXPORT.value
+            if str(self.source_type).strip().casefold() == "curated_export"
+            else normalized_completeness
+        )
         if self.variant_count < 1:
             raise ValueError("variant_count must be at least 1")
         if not 0 <= self.scope_confidence <= 1:

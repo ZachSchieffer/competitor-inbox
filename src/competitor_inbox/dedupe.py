@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 from typing import Iterable, Mapping
 
-from .schema import NormalizedMessage
+from .schema import NormalizedMessage, SourceCompleteness
 
 
 @dataclass(slots=True)
@@ -67,6 +67,12 @@ def _merge(canonical: NormalizedMessage, incoming: NormalizedMessage) -> Normali
     )
     return replace(
         canonical,
+        source_completeness=(
+            SourceCompleteness.CURATED_EXPORT.value
+            if SourceCompleteness.CURATED_EXPORT.value
+            in {canonical.source_completeness, incoming.source_completeness}
+            else SourceCompleteness.COMPLETE.value
+        ),
         variant_count=canonical.variant_count + incoming.variant_count,
         variant_ids=ids,
         parse_errors=list(dict.fromkeys([*canonical.parse_errors, *incoming.parse_errors])),

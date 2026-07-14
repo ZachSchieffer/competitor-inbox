@@ -20,9 +20,12 @@ from ..schema import SourceEnvelope
 KEYCHAIN_SERVICE = "competitor-inbox-imap"
 INTERNALDATE_RE = re.compile(rb'INTERNALDATE "([^"]+)"', re.I)
 UIDVALIDITY_RE = re.compile(rb"UIDVALIDITY\s+(\d+)", re.I)
+FETCH_UID_RE = re.compile(rb"(?:^|[ (])UID\s+(\d+)(?=[ )])", re.I)
 ASCII_WHITESPACE_RE = re.compile(r"[ \t\r\n\f\v]+")
 GOOGLE_APP_PASSWORD_RE = re.compile(r"[A-Za-z0-9]{16}\Z")
 GMAIL_IMAP_HOST = "imap.gmail.com"
+DEFAULT_FETCH_BATCH_SIZE = 200
+MAX_FETCH_BATCH_SIZE = 500
 
 
 class ImapSourceError(RuntimeError):
@@ -89,6 +92,7 @@ class ImapConfig:
     sender_domains: tuple[str, ...] = ()
     timeout_seconds: int = 30
     max_retries: int = 2
+    fetch_batch_size: int = DEFAULT_FETCH_BATCH_SIZE
     keychain_service: str = KEYCHAIN_SERVICE
 
     def __post_init__(self) -> None:
@@ -98,6 +102,14 @@ class ImapConfig:
         mailbox_key = self.mailbox.casefold().replace(" ", "")
         if "spam" in mailbox_key or "trash" in mailbox_key:
             raise ValueError("Spam and Trash mailboxes are not valid ingestion sources")
+        if (
+            isinstance(self.fetch_batch_size, bool)
+            or not isinstance(self.fetch_batch_size, int)
+            or not 1 <= self.fetch_batch_size <= MAX_FETCH_BATCH_SIZE
+        ):
+            raise ValueError(
+                f"fetch_batch_size must be between 1 and {MAX_FETCH_BATCH_SIZE}"
+            )
 
 
 class KeychainCredentialStore:
@@ -163,13 +175,61 @@ def overlap_since(last_success: datetime, *, overlap_days: int = 14) -> datetime
     return last_success.astimezone(timezone.utc) - timedelta(days=overlap_days)
 
 
-def _extract_raw(response: Sequence[object]) -> tuple[bytes, bytes]:
+def _parse_search_uids(response: Sequence[object]) -> list[str]:
+    """Return a stable, duplicate-free UID order from an IMAP SEARCH response."""
+
+    values: set[int] = set()
     for item in response:
-        if isinstance(item, tuple) and len(item) >= 2:
-            metadata, raw = item[0], item[1]
-            if isinstance(metadata, bytes) and isinstance(raw, bytes):
-                return metadata, raw
-    raise RuntimeError("IMAP fetch returned no RFC822 payload")
+        if item is None:
+            continue
+        if not isinstance(item, bytes):
+            raise RuntimeError("IMAP search returned malformed data")
+        for value in item.split():
+            if not value.isdigit():
+                raise RuntimeError("IMAP search returned a malformed UID")
+            parsed = int(value)
+            if parsed <= 0:
+                raise RuntimeError("IMAP search returned a malformed UID")
+            values.add(parsed)
+    return [str(value) for value in sorted(values)]
+
+
+def _uid_batches(uids: Sequence[str], size: int) -> Iterator[list[str]]:
+    for offset in range(0, len(uids), size):
+        yield list(uids[offset : offset + size])
+
+
+def _extract_batch(
+    response: Sequence[object],
+    expected_uids: Sequence[str],
+) -> dict[str, tuple[bytes, bytes]]:
+    """Validate a complete UID FETCH response before any message can be yielded."""
+
+    expected = set(expected_uids)
+    extracted: dict[str, tuple[bytes, bytes]] = {}
+    for item in response:
+        if item is None:
+            continue
+        if not isinstance(item, tuple):
+            # imaplib emits a separate closing parenthesis after each literal.
+            if isinstance(item, bytes) and item.strip() in {b"", b")"}:
+                continue
+            raise RuntimeError("IMAP fetch returned malformed data")
+        if len(item) < 2:
+            raise RuntimeError("IMAP fetch returned malformed data")
+        metadata, raw = item[0], item[1]
+        if not isinstance(metadata, bytes) or not isinstance(raw, bytes):
+            raise RuntimeError("IMAP fetch returned malformed data")
+        match = FETCH_UID_RE.search(metadata)
+        if not match:
+            raise RuntimeError("IMAP fetch omitted UID")
+        uid = str(int(match.group(1)))
+        if uid not in expected or uid in extracted:
+            raise RuntimeError("IMAP fetch returned an unexpected or duplicate UID")
+        extracted[uid] = (metadata, raw)
+    if set(extracted) != expected:
+        raise RuntimeError("IMAP fetch returned an incomplete batch")
+    return extracted
 
 
 def _internal_date(metadata: bytes) -> datetime:
@@ -299,47 +359,61 @@ class ImapSource:
                 raise ImapSourceError("imap_search_failed") from None
             if status != "OK":
                 raise ImapSourceError("imap_search_failed")
-            uids = data[0].split() if data and data[0] else []
+            try:
+                uids = _parse_search_uids(data or [])
+            except RuntimeError:
+                raise ImapSourceError("imap_search_failed") from None
             initial_uidvalidity = self.uidvalidity
-            for uid_bytes in uids:
-                uid = uid_bytes.decode("ascii")
+            for batch in _uid_batches(uids, self.config.fetch_batch_size):
+                envelopes: list[SourceEnvelope] = []
                 for attempt in range(self.config.max_retries + 1):
                     try:
                         assert self._connection is not None
                         fetch_status, fetch_data = self._connection.uid(
                             "fetch",
-                            uid,
+                            ",".join(batch),
                             "(UID INTERNALDATE X-GM-LABELS BODY.PEEK[])",
                         )
                         if fetch_status != "OK":
                             raise imaplib.IMAP4.abort("UID FETCH failed")
-                        metadata, raw = _extract_raw(fetch_data)
+                        fetched = _extract_batch(fetch_data or [], batch)
+                        pending: list[SourceEnvelope] = []
+                        for uid in batch:
+                            metadata, raw = fetched[uid]
+                            if b"\\Spam" in metadata or b"\\Trash" in metadata:
+                                continue
+                            received_at = _internal_date(metadata)
+                            if received_at < since:
+                                continue
+                            if not _allowed(_sender_domain(raw), self.config.sender_domains):
+                                continue
+                            pending.append(
+                                SourceEnvelope(
+                                    raw_bytes=raw,
+                                    source_type="imap",
+                                    source_uid=uid,
+                                    canonical_received_at=received_at,
+                                    received_at_source="imap_internaldate",
+                                    received_at_trusted=True,
+                                    mailbox=self.config.mailbox,
+                                    uidvalidity=initial_uidvalidity,
+                                )
+                            )
+                        envelopes = pending
                         break
-                    except (imaplib.IMAP4.abort, imaplib.IMAP4.error, OSError, RuntimeError):
+                    except (
+                        imaplib.IMAP4.abort,
+                        imaplib.IMAP4.error,
+                        OSError,
+                        RuntimeError,
+                        UnicodeError,
+                        ValueError,
+                    ):
                         if attempt >= self.config.max_retries:
                             raise ImapSourceError("imap_fetch_failed") from None
                         self._reconnect(password)
                         if self.uidvalidity != initial_uidvalidity:
                             raise ImapSourceError("imap_uidvalidity_unavailable")
-                if b"\\Spam" in metadata or b"\\Trash" in metadata:
-                    continue
-                try:
-                    received_at = _internal_date(metadata)
-                except (UnicodeError, ValueError, RuntimeError):
-                    raise ImapSourceError("imap_fetch_failed") from None
-                if received_at < since:
-                    continue
-                if not _allowed(_sender_domain(raw), self.config.sender_domains):
-                    continue
-                yield SourceEnvelope(
-                    raw_bytes=raw,
-                    source_type="imap",
-                    source_uid=uid,
-                    canonical_received_at=received_at,
-                    received_at_source="imap_internaldate",
-                    received_at_trusted=True,
-                    mailbox=self.config.mailbox,
-                    uidvalidity=initial_uidvalidity,
-                )
+                yield from envelopes
         finally:
             self._disconnect()
