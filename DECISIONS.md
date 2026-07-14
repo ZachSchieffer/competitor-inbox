@@ -198,10 +198,11 @@ evidence from local and automated runs can be compared directly.
   can clear the complete-range requirement, so Checkpoint A must use a
   multi-brand fallback with the export limitation stated. No export record or
   asset enters the public competitor-inbox repository.
-- Early Data Gate: passed with 1,238 qualified broadcasts across 37 brands;
-  31 brands cleared 15 broadcasts across at least 45 observed days. The trusted
-  export window is July 11, 2023 through July 8, 2026. Nine lifecycle messages
-  and 2 uncertain messages remain outside broadcast metrics.
+- Early Data Gate: passed with 1,238 qualified broadcasts from 36 contributing
+  brands across a 37-brand source census; 31 brands cleared 15 broadcasts
+  across at least 45 observed days. The trusted export window is July 11, 2023
+  through July 8, 2026. Nine lifecycle messages and 2 uncertain messages remain
+  outside broadcast metrics.
 - Status: active and cleared for Phase 2.
 
 ## 2026-07-14T11:54:00Z: Curated annotations remain subordinate to evidence
