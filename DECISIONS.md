@@ -304,4 +304,4 @@ evidence from local and automated runs can be compared directly.
   from Git history or unreachable local objects.
 - Impact: Checkpoint A numbers, HTML, screenshots, census, and Git source state
   can be tied to one immutable manifest.
-- Status: active until the final clean rebuild.
+- Status: complete.
