@@ -12,6 +12,10 @@ from .store import PRIVATE_FILE_MODE, read_bytes_no_follow
 
 
 LABEL = "com.zhsecom.competitor-inbox"
+SCHEDULE_HOUR_LOCAL = 7
+SCHEDULE_MINUTE_LOCAL = 0
+INCREMENTAL_OVERLAP_DAYS = 14
+MAC_ON_DEPENDENCY = "Updates require this Mac to be on or to wake."
 
 
 def plist_path() -> Path:
@@ -47,7 +51,10 @@ def launch_agent_payload(
         "Label": LABEL,
         "ProgramArguments": arguments,
         "RunAtLoad": True,
-        "StartCalendarInterval": {"Hour": 7, "Minute": 0},
+        "StartCalendarInterval": {
+            "Hour": SCHEDULE_HOUR_LOCAL,
+            "Minute": SCHEDULE_MINUTE_LOCAL,
+        },
         "ProcessType": "Background",
         "StandardOutPath": str(root / "logs" / "launchd.stdout.log"),
         "StandardErrorPath": str(root / "logs" / "launchd.stderr.log"),
@@ -113,18 +120,32 @@ def status(config: AppConfig) -> dict[str, Any]:
         "installed": target.exists(),
         "loaded": query.returncode == 0,
         "plist": str(target),
-        "schedule": "07:00 local daily; RunAtLoad",
+        "schedule": (
+            f"{SCHEDULE_HOUR_LOCAL:02d}:{SCHEDULE_MINUTE_LOCAL:02d} "
+            "local daily; RunAtLoad"
+        ),
         "last_attempt": state.get("last_attempt"),
         "last_success": state.get("last_success"),
         "new_records": state.get("new_distinct_messages"),
         "failures": int(state.get("parse_failures") or 0)
         + int(state.get("ingestion_errors") or 0)
         + int(state.get("update_errors") or 0),
-        "incremental_overlap_days": 14,
+        "incremental_overlap_days": INCREMENTAL_OVERLAP_DAYS,
         "process_lock": "one complete update at a time",
         "failure_behavior": "atomic replacement; prior dashboard retained",
-        "note": "Updates require this Mac to be on or to wake.",
+        "note": MAC_ON_DEPENDENCY,
     }
 
 
-__all__ = ["LABEL", "install", "launch_agent_payload", "plist_path", "remove", "status"]
+__all__ = [
+    "INCREMENTAL_OVERLAP_DAYS",
+    "LABEL",
+    "MAC_ON_DEPENDENCY",
+    "SCHEDULE_HOUR_LOCAL",
+    "SCHEDULE_MINUTE_LOCAL",
+    "install",
+    "launch_agent_payload",
+    "plist_path",
+    "remove",
+    "status",
+]

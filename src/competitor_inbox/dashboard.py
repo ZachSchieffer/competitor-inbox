@@ -19,6 +19,11 @@ from typing import Any, Iterable, Mapping
 
 from .aggregate import aggregate_records
 from .sanitize import assert_recipient_safe, sanitize_text
+from .schedule import (
+    INCREMENTAL_OVERLAP_DAYS,
+    SCHEDULE_HOUR_LOCAL,
+    SCHEDULE_MINUTE_LOCAL,
+)
 
 
 _CSP = (
@@ -42,7 +47,8 @@ class HeroRenderError(RuntimeError):
 
 _CSS = r"""
 :root{color-scheme:light;--bg:#f2f5f9;--surface:#fbfcfe;--ink:#142033;--muted:#56657a;--line:#d8e0ea;--accent:#2457d6;--accent-soft:#e8eefc;--good:#176b4d;--warn:#8a5a08;--radius:14px;--shadow:0 16px 40px rgba(34,56,92,.08)}
-*{box-sizing:border-box}html{background:var(--bg);scroll-behavior:auto}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:16px;line-height:1.5}a{color:inherit}.shell{width:min(1240px,calc(100% - 48px));margin:0 auto}.mast{padding:42px 0 28px;border-bottom:1px solid var(--line);background:var(--surface)}.brandline{display:flex;justify-content:space-between;gap:24px;align-items:flex-start}.brand{font-size:14px;font-weight:760;letter-spacing:.08em;text-transform:uppercase}.stamp,.freshness{display:inline-flex;align-items:center;border:1px solid var(--accent);border-radius:999px;color:var(--accent);font-size:12px;font-weight:760;letter-spacing:.07em;padding:7px 11px;text-transform:uppercase}.freshness{background:var(--accent-soft);letter-spacing:.02em;text-transform:none}.mast h1{font-size:clamp(42px,6vw,78px);letter-spacing:-.055em;line-height:.96;margin:62px 0 18px;max-width:920px}.mast p{color:var(--muted);font-size:19px;max-width:760px;margin:0}.window{display:flex;gap:22px;flex-wrap:wrap;margin-top:30px;color:var(--muted);font-size:14px;align-items:center}.window b{color:var(--ink)}main{padding:36px 0 76px}section{margin:0 0 24px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:28px}.section-head{display:flex;justify-content:space-between;gap:22px;align-items:flex-start;margin-bottom:24px}.section-head h2{font-size:27px;letter-spacing:-.025em;line-height:1.1;margin:0}.section-head p{color:var(--muted);margin:8px 0 0;max-width:640px}.coverage{display:inline-flex;white-space:nowrap;border:1px solid var(--line);border-radius:999px;background:var(--bg);color:var(--muted);font-size:12px;font-weight:700;padding:7px 10px}.metrics{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:14px}.metric{min-height:142px;border:1px solid var(--line);border-radius:var(--radius);padding:20px;background:var(--surface)}.metric.primary{background:var(--accent);border-color:var(--accent);color:#f7f9ff}.metric .value{display:block;font-size:42px;font-variant-numeric:tabular-nums;font-weight:780;letter-spacing:-.045em;line-height:1}.metric .label{display:block;color:var(--muted);font-size:13px;font-weight:700;margin-top:29px}.metric.primary .label{color:#dbe5ff}.metric .note{display:block;color:var(--muted);font-size:12px;margin-top:6px}.metric.primary .note{color:#dbe5ff}.grid-two{display:grid;grid-template-columns:1.25fr .75fr;gap:18px}.subpanel{border:1px solid var(--line);border-radius:var(--radius);padding:20px}.subpanel h3{font-size:17px;margin:0 0 16px}.quadrant{display:grid;grid-template-columns:175px 1fr 90px;align-items:center;gap:14px;margin:0 0 16px}.quadrant:last-child{margin-bottom:0}.quadrant .label{font-size:13px;font-weight:680}.bar{height:9px;background:var(--accent);border-radius:999px;min-width:2px}.bar.secondary{background:#7892cf}.bar.tertiary{background:#a8b5ca}.bar.quiet{background:#c8d0dc}.number{text-align:right;font-variant-numeric:tabular-nums;font-size:13px;color:var(--muted)}.finding-list{display:grid;gap:0}.finding{padding:15px 0;border-bottom:1px solid var(--line)}.finding:last-child{border-bottom:0}.finding strong{display:block;font-size:18px}.finding span{color:var(--muted);font-size:13px}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:var(--radius)}table{border-collapse:collapse;width:100%;font-size:13px}th,td{text-align:left;padding:13px 14px;border-bottom:1px solid var(--line);white-space:nowrap}th{background:var(--bg);color:var(--muted);font-size:11px;letter-spacing:.04em;text-transform:uppercase}tbody tr:last-child td{border-bottom:0}td.num{text-align:right;font-variant-numeric:tabular-nums}.posture{color:var(--accent);font-weight:720}.occasion-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.occasion{border:1px solid var(--line);border-radius:var(--radius);padding:17px}.occasion b{display:block;font-size:24px;font-variant-numeric:tabular-nums}.occasion span{color:var(--muted);font-size:13px}.scope-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.scope-block{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}.scope-block h3{font-size:15px;margin:0;padding:16px;border-bottom:1px solid var(--line)}.message{padding:14px 16px;border-bottom:1px solid var(--line)}.message:last-child{border-bottom:0}.message b{display:block;font-size:13px}.message small{display:block;color:var(--muted);margin-top:4px}.empty{color:var(--muted);font-size:13px;padding:18px}.actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.action{border:1px solid var(--line);border-radius:var(--radius);padding:20px}.action .time{color:var(--accent);font-size:12px;font-weight:780;text-transform:uppercase;letter-spacing:.06em}.action h3{font-size:18px;margin:11px 0 8px}.action p{color:var(--muted);font-size:14px;margin:0}.method{display:grid;grid-template-columns:1fr 1fr;gap:26px}.method h3{font-size:15px;margin:0 0 8px}.method p{color:var(--muted);font-size:14px;margin:0 0 14px}.foot{color:var(--muted);font-size:12px;padding:12px 0 38px;text-align:center}.prototype{outline:3px solid var(--accent);outline-offset:-3px}.prototype section:before{content:"ILLUSTRATIVE PROTOTYPE";display:block;color:var(--accent);font-size:10px;font-weight:800;letter-spacing:.09em;margin-bottom:12px}.hero-page{width:1080px;min-height:1350px;background:var(--bg);padding:64px}.hero-sheet{min-height:1222px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:56px;display:flex;flex-direction:column}.hero-top{display:flex;justify-content:space-between;align-items:flex-start}.hero-kicker{font-size:15px;font-weight:800;letter-spacing:.09em;text-transform:uppercase}.hero-title{font-size:73px;line-height:.98;letter-spacing:-.055em;margin:110px 0 28px;max-width:890px}.hero-sub{color:var(--muted);font-size:22px;max-width:780px}.hero-census{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:72px}.hero-cell{border:1px solid var(--line);border-radius:var(--radius);padding:22px}.hero-cell b{font-size:42px;display:block;font-variant-numeric:tabular-nums;letter-spacing:-.04em}.hero-cell span{color:var(--muted);font-size:14px}.hero-bottom{margin-top:auto;display:flex;justify-content:space-between;align-items:flex-end;border-top:1px solid var(--line);padding-top:28px;color:var(--muted);font-size:14px}.hero-bottom strong{color:var(--ink);display:block;font-size:16px}.accent-rule{height:8px;width:124px;border-radius:999px;background:var(--accent);margin-top:30px}.dashboard-hero.hero-sheet{padding:44px 48px}.dashboard-hero .hero-title{font-size:56px;line-height:1;max-width:900px;margin:50px 0 18px}.dashboard-hero .hero-sub{font-size:18px;max-width:850px}.dashboard-hero .accent-rule{height:6px;margin-top:22px}.dashboard-product{margin-top:28px;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);overflow:hidden;box-shadow:0 12px 30px rgba(34,56,92,.07)}.dashboard-product-bar{display:flex;justify-content:space-between;align-items:center;gap:18px;padding:14px 18px;background:var(--surface);border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}.dashboard-product-bar strong{color:var(--ink);font-size:14px}.dashboard-product .hero-census{grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0;padding:18px}.dashboard-product .hero-cell{padding:15px;background:var(--surface)}.dashboard-product .hero-cell b{font-size:31px}.dashboard-product .hero-cell span{font-size:11px}.package-head{display:flex;justify-content:space-between;align-items:center;padding:0 18px 10px;color:var(--muted);font-size:11px;font-weight:760;letter-spacing:.06em;text-transform:uppercase}.package-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 18px 18px}.package-item{min-height:72px;border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:13px 14px}.package-item strong{display:block;font-size:14px}.package-item span{display:block;color:var(--muted);font-size:11px;margin-top:3px}.dashboard-hero .hero-bottom{padding-top:20px;font-size:12px}.dashboard-hero .hero-bottom strong{font-size:14px}
+*{box-sizing:border-box}html{background:var(--bg);scroll-behavior:auto}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:16px;line-height:1.5}a{color:inherit}.shell{width:min(1240px,calc(100% - 48px));margin:0 auto}.mast{padding:42px 0 28px;border-bottom:1px solid var(--line);background:var(--surface)}.brandline{display:flex;justify-content:space-between;gap:24px;align-items:flex-start}.brand{font-size:14px;font-weight:760;letter-spacing:.08em;text-transform:uppercase}.stamp,.freshness{display:inline-flex;align-items:center;border:1px solid var(--accent);border-radius:999px;color:var(--accent);font-size:12px;font-weight:760;letter-spacing:.07em;padding:7px 11px;text-transform:uppercase}.freshness{background:var(--accent-soft);letter-spacing:.02em;text-transform:none}.mast h1{font-size:clamp(42px,6vw,78px);letter-spacing:-.055em;line-height:.96;margin:62px 0 18px;max-width:920px}.mast p{color:var(--muted);font-size:19px;max-width:760px;margin:0}.window{display:flex;gap:22px;flex-wrap:wrap;margin-top:30px;color:var(--muted);font-size:14px;align-items:center}.window b{color:var(--ink)}main{padding:36px 0 76px}section{margin:0 0 24px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:28px}.section-head{display:flex;justify-content:space-between;gap:22px;align-items:flex-start;margin-bottom:24px}.section-head h2{font-size:27px;letter-spacing:-.025em;line-height:1.1;margin:0}.section-head p{color:var(--muted);margin:8px 0 0;max-width:640px}.coverage{display:inline-flex;white-space:nowrap;border:1px solid var(--line);border-radius:999px;background:var(--bg);color:var(--muted);font-size:12px;font-weight:700;padding:7px 10px}.metrics{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:14px}.metric{min-height:142px;border:1px solid var(--line);border-radius:var(--radius);padding:20px;background:var(--surface)}.metric.primary{background:var(--accent);border-color:var(--accent);color:#f7f9ff}.metric .value{display:block;font-size:42px;font-variant-numeric:tabular-nums;font-weight:780;letter-spacing:-.045em;line-height:1}.metric .label{display:block;color:var(--muted);font-size:13px;font-weight:700;margin-top:29px}.metric.primary .label{color:#dbe5ff}.metric .note{display:block;color:var(--muted);font-size:12px;margin-top:6px}.metric.primary .note{color:#dbe5ff}.grid-two{display:grid;grid-template-columns:1.25fr .75fr;gap:18px}.subpanel{border:1px solid var(--line);border-radius:var(--radius);padding:20px}.subpanel h3{font-size:17px;margin:0 0 16px}.quadrant{display:grid;grid-template-columns:175px 1fr 90px;align-items:center;gap:14px;margin:0 0 16px}.quadrant:last-child{margin-bottom:0}.quadrant .label{font-size:13px;font-weight:680}.bar{height:9px;background:var(--accent);border-radius:999px;min-width:2px}.bar.secondary{background:#7892cf}.bar.tertiary{background:#a8b5ca}.bar.quiet{background:#c8d0dc}.number{text-align:right;font-variant-numeric:tabular-nums;font-size:13px;color:var(--muted)}.finding-list{display:grid;gap:0}.finding{padding:15px 0;border-bottom:1px solid var(--line)}.finding:last-child{border-bottom:0}.finding strong{display:block;font-size:18px}.finding span{color:var(--muted);font-size:13px}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:var(--radius)}table{border-collapse:collapse;width:100%;font-size:13px}th,td{text-align:left;padding:13px 14px;border-bottom:1px solid var(--line);white-space:nowrap}th{background:var(--bg);color:var(--muted);font-size:11px;letter-spacing:.04em;text-transform:uppercase}tbody tr:last-child td{border-bottom:0}td.num{text-align:right;font-variant-numeric:tabular-nums}.posture{color:var(--accent);font-weight:720}.occasion-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.occasion{border:1px solid var(--line);border-radius:var(--radius);padding:17px}.occasion b{display:block;font-size:24px;font-variant-numeric:tabular-nums}.occasion span{color:var(--muted);font-size:13px}.scope-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.scope-block{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}.scope-block h3{font-size:15px;margin:0;padding:16px;border-bottom:1px solid var(--line)}.message{padding:14px 16px;border-bottom:1px solid var(--line)}.message:last-child{border-bottom:0}.message b{display:block;font-size:13px}.message small{display:block;color:var(--muted);margin-top:4px}.empty{color:var(--muted);font-size:13px;padding:18px}.actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.action{border:1px solid var(--line);border-radius:var(--radius);padding:20px}.action .time{color:var(--accent);font-size:12px;font-weight:780;text-transform:uppercase;letter-spacing:.06em}.action h3{font-size:18px;margin:11px 0 8px}.action p{color:var(--muted);font-size:14px;margin:0}.method{display:grid;grid-template-columns:1fr 1fr;gap:26px}.method h3{font-size:15px;margin:0 0 8px}.method p{color:var(--muted);font-size:14px;margin:0 0 14px}.foot{color:var(--muted);font-size:12px;padding:12px 0 38px;text-align:center}.prototype{outline:3px solid var(--accent);outline-offset:-3px}.prototype section:before{content:"ILLUSTRATIVE PROTOTYPE";display:block;color:var(--accent);font-size:10px;font-weight:800;letter-spacing:.09em;margin-bottom:12px}.hero-page{width:1080px;min-height:1350px;background:var(--bg);padding:64px}.hero-sheet{min-height:1222px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:56px;display:flex;flex-direction:column}.hero-top{display:flex;justify-content:space-between;align-items:flex-start}.hero-kicker{font-size:15px;font-weight:800;letter-spacing:.09em;text-transform:uppercase}.hero-title{font-size:73px;line-height:.98;letter-spacing:-.055em;margin:110px 0 28px;max-width:890px}.hero-sub{color:var(--muted);font-size:22px;max-width:780px}.hero-census{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:72px}.hero-cell{border:1px solid var(--line);border-radius:var(--radius);padding:22px}.hero-cell b{font-size:42px;display:block;font-variant-numeric:tabular-nums;letter-spacing:-.04em}.hero-cell span{color:var(--muted);font-size:14px}.hero-bottom{margin-top:auto;display:flex;justify-content:space-between;align-items:flex-end;border-top:1px solid var(--line);padding-top:28px;color:var(--muted);font-size:14px}.hero-bottom strong{color:var(--ink);display:block;font-size:16px}.accent-rule{height:8px;width:124px;border-radius:999px;background:var(--accent);margin-top:30px}.dashboard-hero.hero-sheet{padding:44px 48px}.dashboard-hero .hero-title{font-size:56px;line-height:1;max-width:900px;margin:50px 0 18px}.dashboard-hero .hero-sub{font-size:18px;max-width:850px}.dashboard-hero .accent-rule{height:6px;margin-top:22px}.dashboard-product{margin-top:28px;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);overflow:hidden;box-shadow:0 12px 30px rgba(34,56,92,.07)}.dashboard-product-bar{display:flex;justify-content:space-between;align-items:center;gap:18px;padding:14px 18px;background:var(--surface);border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}.dashboard-product-bar strong{color:var(--ink);font-size:14px}.dashboard-product .hero-census{grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0;padding:18px}.dashboard-product .hero-cell{padding:15px;background:var(--surface)}.dashboard-product .hero-cell b{font-size:31px}.dashboard-product .hero-cell span{font-size:11px}.package-head{display:flex;justify-content:space-between;align-items:center;padding:0 18px 10px;color:var(--muted);font-size:11px;font-weight:760;letter-spacing:.06em;text-transform:uppercase}.package-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 18px 18px}.package-item{min-height:72px;border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:13px 14px}.package-item strong{display:block;font-size:14px}.package-item span{display:block;color:var(--muted);font-size:11px;margin-top:3px}.update-proof{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:0 18px 18px}.update-item{min-height:64px;border:1px solid var(--line);border-radius:10px;background:var(--accent-soft);padding:11px 12px}.update-item strong{display:block;color:var(--ink);font-size:12px;line-height:1.25}.update-item span{display:block;color:var(--muted);font-size:10px;line-height:1.3;margin-top:4px}.dashboard-hero .hero-bottom{padding-top:20px;font-size:12px}.dashboard-hero .hero-bottom strong{font-size:14px}
+.update-item strong{font-size:11px;white-space:nowrap}
 .hero-bottom>div:last-child{max-width:500px;text-align:right}
 @media(max-width:900px){.shell{width:min(100% - 28px,1240px)}.mast{padding-top:28px}.mast h1{margin-top:44px}.section-head{display:block}.coverage{display:flex;width:100%;max-width:100%;margin-top:14px;white-space:normal;line-height:1.35}.metrics,.scope-grid,.actions,.method{grid-template-columns:1fr}.grid-two{grid-template-columns:1fr}.occasion-grid{grid-template-columns:1fr 1fr}.quadrant{grid-template-columns:125px 1fr 72px}.metric{min-height:120px}.metric .label{margin-top:18px}section{padding:20px}.brandline{display:flex;flex-direction:column;align-items:flex-start}.stamp,.freshness{margin-top:14px}}
 @media(max-width:520px){.occasion-grid{grid-template-columns:1fr}.mast h1{font-size:43px}.window{display:block}.window span{display:block;margin-top:7px}.quadrant{grid-template-columns:1fr 60px}.quadrant .bar{grid-column:1/-1;grid-row:2}.number{grid-column:2}.section-head h2{font-size:24px}}
@@ -135,6 +141,15 @@ def _brand_table(summary: Mapping[str, Any]) -> str:
     for brand in summary.get("brands", []):
         q = brand.get("quadrants", {})
         posture = brand.get("posture", {})
+        posture_eligible = (
+            int(brand.get("qualified_broadcasts", 0)) >= 30
+            and int(brand.get("observed_days", 0)) >= 90
+        )
+        posture_label = (
+            str(posture.get("label") or "Mixed")
+            if posture_eligible
+            else "Insufficient history"
+        )
         rows.append(
             "<tr>"
             f"<td><strong>{_e(brand.get('brand'))}</strong></td>"
@@ -144,7 +159,7 @@ def _brand_table(summary: Mapping[str, Any]) -> str:
             f"<td class=\"num\">{int(q.get('Everyday promotion',0)):,}</td>"
             f"<td class=\"num\">{int(q.get('Seasonal promotion',0)):,}</td>"
             f"<td class=\"num\">{int(q.get('Seasonal content',0)):,}</td>"
-            f"<td><span class=\"posture\">{_e(posture.get('label','Mixed'))}</span></td>"
+            f"<td><span class=\"posture\">{_e(posture_label)}</span></td>"
             f"<td>{_e(brand.get('coverage',{}).get('label',''))}</td>"
             "</tr>"
         )
@@ -191,7 +206,7 @@ def render_dashboard(summary: Mapping[str, Any], title: str = "The Competitor In
     findings = "".join(
         '<div class="finding">'
         f"<strong>{_e(item.get('value'))}</strong>"
-        f"<span>{_e(item.get('label'))}. {int(item.get('numerator',0)):,} of {int(item.get('denominator',0)):,} qualified broadcasts.</span>"
+        f"<span>{_e(item.get('label'))}. {int(item.get('numerator',0)):,} of {int(item.get('denominator',0)):,} {_e(item.get('denominator_unit') or 'qualified broadcasts')}.</span>"
         "</div>"
         for item in visible_findings
     )
@@ -199,10 +214,27 @@ def render_dashboard(summary: Mapping[str, Any], title: str = "The Competitor In
         f'<div class="occasion"><b>{int(count):,}</b><span>{_e(name)}</span></div>'
         for name, count in list(summary.get("occasions", {}).items())[:12]
     ) or '<div class="empty">No explicit seasonal occasions met the evidence rule.</div>'
+    seasonal_planner = summary.get("seasonal_planner", {})
+    seasonal_minimum = int(seasonal_planner.get("minimum_observed_days", 330))
+    seasonal_brand_count = int(seasonal_planner.get("eligible_brand_count", 0))
+    seasonal_total_brands = int(
+        seasonal_planner.get("total_brand_count", brands)
+    )
+    seasonal_message_count = int(
+        seasonal_planner.get("eligible_message_count", 0)
+    )
+    seasonal_coverage = (
+        f"{seasonal_minimum}-day gate | {seasonal_brand_count} of "
+        f"{seasonal_total_brands} brands | n={seasonal_message_count:,} broadcasts"
+    )
     annual_copy = (
-        "Use the prior 12 months to map retail moments before calendar planning begins."
-        if int(meta.get("observed_days", 0)) >= 330
-        else "Keep collecting history until annual planning coverage reaches 330 observed days."
+        "Plan against explicit occasions from brands with at least "
+        f"{seasonal_minimum} observed days."
+        if seasonal_brand_count
+        else (
+            f"No brand has {seasonal_minimum} observed days yet. Keep collecting "
+            "history before prior-season planning."
+        )
     )
     generated_date = str(meta.get("generated_at") or "")[:10]
     freshness = f"Fresh as of {generated_date}" if generated_date else "Freshness unavailable"
@@ -222,7 +254,7 @@ def render_dashboard(summary: Mapping[str, Any], title: str = "The Competitor In
 <section aria-labelledby="comparison">{_section_head('Competitor Comparison','Compare planning mix and strategic posture using qualified broadcasts only.',coverage)}{_brand_table(summary)}</section>
 <section aria-labelledby="engine">{_section_head('Evergreen and Promotional Engine','Offer status and seasonality are independent, so the 4-part census stays useful for planning.',coverage)}
 <div class="grid-two"><div class="subpanel"><h3>Four-quadrant census</h3>{_quadrant_rows(summary)}</div><div class="subpanel"><h3>What stands out</h3><div class="finding-list">{findings}</div></div></div></section>
-<section aria-labelledby="seasonal">{_section_head('Seasonal Planner',annual_copy,coverage)}<div class="occasion-grid">{occasions}</div></section>
+<section aria-labelledby="seasonal">{_section_head('Seasonal Planner',annual_copy,seasonal_coverage)}<div class="occasion-grid">{occasions}</div></section>
 <section aria-labelledby="library">{_section_head('Messaging Library','Browse recent sanitized subjects by scope. Only broadcasts feed the strategy metrics.',coverage)}
 <div class="scope-grid"><div class="scope-block"><h3>Broadcast</h3>{_messages(summary,'broadcast')}</div><div class="scope-block"><h3>Lifecycle</h3>{_messages(summary,'lifecycle')}</div><div class="scope-block"><h3>Uncertain</h3>{_messages(summary,'uncertain')}</div></div></section>
 <section aria-labelledby="action">{_section_head('Owner Action Plan','Turn the census into the next planning conversation without treating inbox activity as performance.',coverage)}
@@ -609,6 +641,45 @@ def _hero_priority(summary: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(output)
 
 
+def _local_time_label(hour: int, minute: int) -> str:
+    suffix = "AM" if hour < 12 else "PM"
+    display_hour = hour % 12 or 12
+    return f"{display_hour}:{minute:02d} {suffix} local"
+
+
+def _hero_update_contract(
+    summary: Mapping[str, Any],
+    *,
+    current_through: Any,
+) -> dict[str, Any]:
+    metadata = summary.get("metadata", {})
+    contract = metadata.get("update_contract", {})
+    if not isinstance(contract, Mapping):
+        contract = {}
+    hour = int(contract.get("schedule_hour_local", SCHEDULE_HOUR_LOCAL))
+    minute = int(contract.get("schedule_minute_local", SCHEDULE_MINUTE_LOCAL))
+    overlap = int(
+        contract.get("incremental_overlap_days", INCREMENTAL_OVERLAP_DAYS)
+    )
+    return {
+        "current_through": str(
+            current_through
+            or contract.get("current_through")
+            or metadata.get("last_observed")
+            or "Unavailable"
+        ),
+        "schedule_hour_local": hour,
+        "schedule_minute_local": minute,
+        "schedule_label": _local_time_label(hour, minute),
+        "incremental_overlap_days": overlap,
+        "mac_on_dependency": (
+            "Mac must be on or wake"
+            if bool(contract.get("requires_mac_on_or_wake", True))
+            else "Scheduler host must be available"
+        ),
+    }
+
+
 def _hero_context(summary: Mapping[str, Any], variant: str) -> dict[str, Any]:
     priority_brands = _hero_priority(summary)
     priority = {
@@ -665,6 +736,10 @@ def _hero_context(summary: Mapping[str, Any], variant: str) -> dict[str, Any]:
             "footer_label": f"{brand['brand']} census",
             "coverage_label": coverage_label,
             "coverage_note": coverage_note,
+            "update_contract": _hero_update_contract(
+                summary,
+                current_through=brand.get("last_observed", ""),
+            ),
             "hook": {
                 "type": "priority_brand" if priority else "generic_brand",
                 "selection_basis": "largest qualified-broadcast denominator",
@@ -726,6 +801,10 @@ def _hero_context(summary: Mapping[str, Any], variant: str) -> dict[str, Any]:
         "footer_label": "Portfolio census",
         "coverage_label": coverage_label,
         "coverage_note": coverage_note,
+        "update_contract": _hero_update_contract(
+            summary,
+            current_through=metadata.get("last_observed", ""),
+        ),
         "hook": {
             "type": "multi_brand_fallback" if priority else "generic_portfolio",
             "selection_basis": (
@@ -759,9 +838,16 @@ def render_hero(summary: Mapping[str, Any], variant: str = "brand") -> str:
         for row in context["quadrants"]
     )
     if context["layout"] == "dashboard":
+        update = context["update_contract"]
         product_surface = f"""<div class="dashboard-product">
 <div class="dashboard-product-bar"><strong>{_e(context['footer_label'])}</strong><span>{total:,} qualified broadcasts | {int(context['observed_days']):,} observed days</span></div>
 <div class="hero-census">{quadrant_cells}</div>
+<div class="update-proof" aria-label="Update proof">
+<div class="update-item"><strong>Current through {_e(update['current_through'])}</strong><span>Frozen inbox receipt window</span></div>
+<div class="update-item"><strong>Daily {_e(update['schedule_label'])} update</strong><span>Runs at load too</span></div>
+<div class="update-item"><strong>{int(update['incremental_overlap_days'])}-day overlap</strong><span>Catches late-arriving mail</span></div>
+<div class="update-item"><strong>{_e(update['mac_on_dependency'])}</strong><span>Local scheduler, not cloud uptime</span></div>
+</div>
 <div class="package-head"><span>Owner-level dashboard</span><span>{_e(context['coverage_label'])}</span></div>
 <div class="package-grid">
 <div class="package-item"><strong>Competitor comparison</strong><span>Cadence, mix, and posture by brand</span></div>
@@ -864,6 +950,8 @@ def _freeze_metrics(summary: Mapping[str, Any]) -> dict[str, Any]:
         for value in brand_metrics.values()
     )
     metadata = summary.get("metadata", {})
+    update_contract = dict(metadata.get("update_contract", {}) or {})
+    seasonal_planner = dict(summary.get("seasonal_planner", {}) or {})
     qualified_broadcasts = int(summary.get("broadcast_count", 0))
     brand_count = int(summary.get("brand_count", 0))
     offer_count = everyday_promotion + seasonal_promotion
@@ -873,6 +961,40 @@ def _freeze_metrics(summary: Mapping[str, Any]) -> dict[str, Any]:
         "brand_count": brand_count,
         "broadcast_brand_count": int(summary.get("broadcast_brand_count", 0)),
         "observed_days": int(metadata.get("observed_days", 0)),
+        "update_contract": {
+            "current_through": str(update_contract.get("current_through") or ""),
+            "schedule_hour_local": int(
+                update_contract.get("schedule_hour_local", SCHEDULE_HOUR_LOCAL)
+            ),
+            "schedule_minute_local": int(
+                update_contract.get("schedule_minute_local", SCHEDULE_MINUTE_LOCAL)
+            ),
+            "incremental_overlap_days": int(
+                update_contract.get(
+                    "incremental_overlap_days", INCREMENTAL_OVERLAP_DAYS
+                )
+            ),
+            "requires_mac_on_or_wake": bool(
+                update_contract.get("requires_mac_on_or_wake", True)
+            ),
+        },
+        "seasonal_planner": {
+            "minimum_observed_days": int(
+                seasonal_planner.get("minimum_observed_days", 330)
+            ),
+            "eligible_brand_count": int(
+                seasonal_planner.get("eligible_brand_count", 0)
+            ),
+            "total_brand_count": int(
+                seasonal_planner.get("total_brand_count", brand_count)
+            ),
+            "eligible_message_count": int(
+                seasonal_planner.get("eligible_message_count", 0)
+            ),
+            "eligible_brands": [
+                str(value) for value in seasonal_planner.get("eligible_brands", [])
+            ],
+        },
         "scope_counts": scope_counts,
         "offer_count": offer_count,
         "offer_share": (
@@ -980,6 +1102,9 @@ def write_freeze_manifest(
         "qualified_broadcasts": int(summary.get("broadcast_count", 0)),
         "metrics": frozen_metrics,
         "hero_selection": hero_selection(summary),
+        "hero_update_contract": dict(
+            _hero_context(summary, "brand")["update_contract"]
+        ),
         "definition": "scope=broadcast; lifecycle and uncertain excluded",
         "dedupe": "source UID, Message-ID, content hash, then brand and campaign similarity",
         "filters": summary.get("metadata", {}).get("filters", {}),

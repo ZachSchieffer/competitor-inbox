@@ -16,6 +16,11 @@ from .analysis import (
     sanitize_ai_text,
 )
 from .schema import SourceCompleteness
+from .schedule import (
+    INCREMENTAL_OVERLAP_DAYS,
+    SCHEDULE_HOUR_LOCAL,
+    SCHEDULE_MINUTE_LOCAL,
+)
 
 
 class CrossFootError(ValueError):
@@ -33,6 +38,10 @@ POSTURE_LABELS = {
     "Featured products": "Merchandising led",
     "Lifestyle/seasonal": "Lifestyle led",
 }
+
+POSTURE_MIN_BROADCASTS = 30
+POSTURE_MIN_OBSERVED_DAYS = 90
+SEASONAL_PLANNER_MIN_OBSERVED_DAYS = 330
 
 
 def _get(record: Mapping[str, Any], *names: str, default: Any = "") -> Any:
@@ -130,6 +139,36 @@ def assign_posture(intent_counts: Mapping[str, int]) -> dict[str, Any]:
         "leading_intent": leader,
         "share": round(share, 4),
         "runner_up_share": round(runner_share, 4),
+    }
+
+
+def _posture_with_coverage(
+    intent_counts: Mapping[str, int],
+    *,
+    qualified_broadcasts: int,
+    observed_days: int,
+) -> dict[str, Any]:
+    """Apply the public posture gate before exposing a strategic label."""
+
+    eligible = (
+        qualified_broadcasts >= POSTURE_MIN_BROADCASTS
+        and observed_days >= POSTURE_MIN_OBSERVED_DAYS
+    )
+    if not eligible:
+        return {
+            "label": "Insufficient history",
+            "leading_intent": "",
+            "share": 0.0,
+            "runner_up_share": 0.0,
+            "eligible": False,
+            "minimum_qualified_broadcasts": POSTURE_MIN_BROADCASTS,
+            "minimum_observed_days": POSTURE_MIN_OBSERVED_DAYS,
+        }
+    return {
+        **assign_posture(intent_counts),
+        "eligible": True,
+        "minimum_qualified_broadcasts": POSTURE_MIN_BROADCASTS,
+        "minimum_observed_days": POSTURE_MIN_OBSERVED_DAYS,
     }
 
 
@@ -324,7 +363,11 @@ def aggregate_records(
                 "source_completeness": completeness,
                 "ingestion_errors": parse_errors + missing_dates,
                 "coverage": coverage_level(days),
-                "posture": assign_posture(intent_counts),
+                "posture": _posture_with_coverage(
+                    intent_counts,
+                    qualified_broadcasts=len(brand_broadcasts),
+                    observed_days=days,
+                ),
                 "intent_counts": dict(sorted(intent_counts.items())),
                 "quadrants": {name: quadrant_counts.get(name, 0) for name in QUADRANTS},
                 "offer_count": sum(bool(_get(record, "offer.present", default=False)) for record in brand_broadcasts),
@@ -338,6 +381,21 @@ def aggregate_records(
         )
     brand_rows.sort(key=lambda row: (-row["qualified_broadcasts"], row["brand"].casefold()))
 
+    seasonal_eligible_brands = sorted(
+        (
+            str(row["brand"])
+            for row in brand_rows
+            if int(row.get("observed_days", 0))
+            >= SEASONAL_PLANNER_MIN_OBSERVED_DAYS
+            and int(row.get("qualified_broadcasts", 0)) > 0
+        ),
+        key=str.casefold,
+    )
+    seasonal_eligible_set = set(seasonal_eligible_brands)
+    seasonal_broadcasts = [
+        record for record in broadcasts if _brand(record) in seasonal_eligible_set
+    ]
+
     quadrant_rows = [
         {
             "name": name,
@@ -349,7 +407,7 @@ def aggregate_records(
     intent_counts = Counter(str(_get(record, "intent.label", default="Featured products")) for record in broadcasts)
     occasion_counts = Counter(
         str(occasion)
-        for record in broadcasts
+        for record in seasonal_broadcasts
         if (occasion := _get(record, "seasonality.occasion", default=""))
     )
     library = [_safe_library_item(record) for record in analyzed]
@@ -365,6 +423,13 @@ def aggregate_records(
             "trusted_receipt_dates": len(all_dates),
             "untrusted_receipt_dates": len(broadcasts) - len(all_dates),
             "coverage": coverage_level(observed_days),
+            "update_contract": {
+                "current_through": all_dates[-1].isoformat() if all_dates else "",
+                "schedule_hour_local": SCHEDULE_HOUR_LOCAL,
+                "schedule_minute_local": SCHEDULE_MINUTE_LOCAL,
+                "incremental_overlap_days": INCREMENTAL_OVERLAP_DAYS,
+                "requires_mac_on_or_wake": True,
+            },
         },
         "pipeline": pipeline,
         "scope_counts": {
@@ -379,8 +444,19 @@ def aggregate_records(
         ),
         "quadrants": quadrant_rows,
         "intent_counts": dict(sorted(intent_counts.items(), key=lambda item: (-item[1], item[0]))),
-        "overall_posture": assign_posture(intent_counts),
+        "overall_posture": _posture_with_coverage(
+            intent_counts,
+            qualified_broadcasts=len(broadcasts),
+            observed_days=observed_days,
+        ),
         "occasions": dict(sorted(occasion_counts.items(), key=lambda item: (-item[1], item[0]))),
+        "seasonal_planner": {
+            "minimum_observed_days": SEASONAL_PLANNER_MIN_OBSERVED_DAYS,
+            "eligible_brand_count": len(seasonal_eligible_brands),
+            "total_brand_count": len(by_brand),
+            "eligible_message_count": len(seasonal_broadcasts),
+            "eligible_brands": seasonal_eligible_brands,
+        },
         "monthly": dict(sorted(months.items())),
         "brands": brand_rows,
         "library": library,
@@ -425,6 +501,23 @@ def verify_cross_foot(summary: Mapping[str, Any]) -> dict[str, Any]:
         + by_quadrant.get("Seasonal content", 0)
     )
     checks["seasonal_axes_reconcile"] = checks["promotion_axes_reconcile"]
+    seasonal_planner = summary.get("seasonal_planner", {})
+    eligible_brands = {
+        str(value) for value in seasonal_planner.get("eligible_brands", [])
+    }
+    checks["seasonal_planner_brand_count_matches"] = int(
+        seasonal_planner.get("eligible_brand_count", 0)
+    ) == len(eligible_brands)
+    checks["seasonal_planner_messages_equal_eligible_brands"] = int(
+        seasonal_planner.get("eligible_message_count", 0)
+    ) == sum(
+        int(row.get("qualified_broadcasts", 0))
+        for row in summary.get("brands", [])
+        if str(row.get("brand") or "") in eligible_brands
+    )
+    checks["seasonal_occasions_within_eligible_messages"] = sum(
+        int(value) for value in summary.get("occasions", {}).values()
+    ) <= int(seasonal_planner.get("eligible_message_count", 0))
     failures = [name for name, passed in checks.items() if not passed]
     if failures:
         raise CrossFootError("Cross-foot failed: " + ", ".join(failures))
@@ -467,6 +560,7 @@ def build_findings(summary: Mapping[str, Any]) -> list[dict[str, Any]]:
         *,
         included_brands: list[str] | None = None,
         gate: Mapping[str, Any] | None = None,
+        denominator_unit: str = "qualified broadcasts",
     ) -> dict[str, Any]:
         percentage = 100 * numerator / denominator if denominator else 0.0
         return {
@@ -474,6 +568,7 @@ def build_findings(summary: Mapping[str, Any]) -> list[dict[str, Any]]:
             "value": f"{percentage:.1f}%",
             "numerator": numerator,
             "denominator": denominator,
+            "denominator_unit": denominator_unit,
             "date_range": date_range,
             "brand_set": included_brands if included_brands is not None else brand_set,
             "limitation": limitation,
@@ -519,6 +614,7 @@ def build_findings(summary: Mapping[str, Any]) -> list[dict[str, Any]]:
             len(cadence_brands),
             brand_count,
             included_brands=cadence_brands,
+            denominator_unit="brands",
             gate={
                 "name": "brand_cadence_mix",
                 "minimum_qualified_broadcasts": 30,

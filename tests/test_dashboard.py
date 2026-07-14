@@ -125,9 +125,18 @@ def test_hero_candidates_are_1080_by_1350_screenshot_ready(tmp_path: Path) -> No
         r"sent 126 broadcasts in 3\d{2} observed days",
         candidates[0].read_text(encoding="utf-8"),
     )
+    primary = candidates[0].read_text(encoding="utf-8")
+    assert f"Current through {summary['brands'][0]['last_observed']}" in primary
+    assert "Daily 7:00 AM local update" in primary
+    assert "14-day overlap" in primary
+    assert "Mac must be on or wake" in primary
+    assert "Local scheduler, not cloud uptime" in primary
     assert re.search(
         r"1,260 emails from 10 brands, mapped into one strategy dashboard",
         candidates[1].read_text(encoding="utf-8"),
+    )
+    assert "Daily 7:00 AM local update" not in candidates[1].read_text(
+        encoding="utf-8"
     )
 
 
@@ -273,6 +282,14 @@ def test_freeze_manifest_binds_the_visible_launch_hook(tmp_path: Path) -> None:
         "source_completeness": "complete",
         "type": "priority_brand",
     }
+    assert manifest["hero_update_contract"] == {
+        "current_through": "2026-06-01",
+        "incremental_overlap_days": 14,
+        "mac_on_dependency": "Mac must be on or wake",
+        "schedule_hour_local": 7,
+        "schedule_label": "7:00 AM local",
+        "schedule_minute_local": 0,
+    }
 
 
 def test_freeze_refuses_hero_html_that_does_not_match_its_census(tmp_path: Path) -> None:
@@ -347,6 +364,122 @@ def test_curated_dashboard_does_not_promote_a_capped_volume_leader() -> None:
         "n=1,260 broadcasts"
     ) in document
     assert "This is a curated export subset" in document
+
+
+def test_dashboard_withholds_thin_posture_and_uses_brand_denominator_copy() -> None:
+    summary = demo_summary()
+    thin = summary["brands"][0]
+    thin["qualified_broadcasts"] = 30
+    thin["observed_days"] = 89
+    thin["posture"] = {"label": "Promotion led"}
+
+    document = render_dashboard(summary)
+
+    assert "Insufficient history" in document
+    assert "Brands with cadence and mix coverage. 10 of 10 brands." in document
+    assert "Brands with cadence and mix coverage. 10 of 10 qualified broadcasts." not in document
+    coverage_finding = summary["findings"][-1]
+    assert coverage_finding["denominator_unit"] == "brands"
+
+
+def test_seasonal_planner_uses_only_brands_passing_the_330_day_gate() -> None:
+    def record(
+        record_id: str,
+        brand: str,
+        received: str,
+        subject: str,
+    ) -> dict[str, object]:
+        return {
+            "id": record_id,
+            "brand": brand,
+            "canonical_received_at": f"{received}T08:00:00+00:00",
+            "subject": subject,
+            "preheader": "Planning details",
+            "visible_text": "A practical planning note.",
+            "scope": "broadcast",
+            "variant_count": 1,
+        }
+
+    summary = aggregate_records(
+        [
+            record("eligible-start", "Eligible Brand", "2025-01-01", "Product guide"),
+            record(
+                "eligible-end",
+                "Eligible Brand",
+                "2025-11-26",
+                "Black Friday planning guide",
+            ),
+            record("thin-start", "Thin Brand", "2026-01-01", "Product guide"),
+            record(
+                "thin-end",
+                "Thin Brand",
+                "2026-01-20",
+                "Cyber Monday planning guide",
+            ),
+        ]
+    )
+    document = render_dashboard(summary)
+
+    assert summary["metadata"]["observed_days"] >= 330
+    assert summary["seasonal_planner"] == {
+        "minimum_observed_days": 330,
+        "eligible_brand_count": 1,
+        "total_brand_count": 2,
+        "eligible_message_count": 2,
+        "eligible_brands": ["Eligible Brand"],
+    }
+    assert summary["occasions"] == {"Black Friday": 1}
+    assert "330-day gate | 1 of 2 brands | n=2 broadcasts" in document
+    assert "Plan against explicit occasions from brands with at least 330 observed days." in document
+    assert "<span>Black Friday</span>" in document
+    assert "<span>Cyber Monday</span>" not in document
+    assert summary["cross_foot"]["checks"][
+        "seasonal_planner_messages_equal_eligible_brands"
+    ] is True
+
+
+def test_global_date_span_alone_cannot_enable_seasonal_planning() -> None:
+    summary = aggregate_records(
+        [
+            {
+                "id": "alpha-1",
+                "brand": "Alpha",
+                "canonical_received_at": "2025-01-01T08:00:00+00:00",
+                "subject": "Black Friday guide",
+                "scope": "broadcast",
+            },
+            {
+                "id": "alpha-2",
+                "brand": "Alpha",
+                "canonical_received_at": "2025-01-20T08:00:00+00:00",
+                "subject": "Product guide",
+                "scope": "broadcast",
+            },
+            {
+                "id": "beta-1",
+                "brand": "Beta",
+                "canonical_received_at": "2026-01-01T08:00:00+00:00",
+                "subject": "Cyber Monday guide",
+                "scope": "broadcast",
+            },
+            {
+                "id": "beta-2",
+                "brand": "Beta",
+                "canonical_received_at": "2026-01-20T08:00:00+00:00",
+                "subject": "Product guide",
+                "scope": "broadcast",
+            },
+        ]
+    )
+    document = render_dashboard(summary)
+
+    assert summary["metadata"]["observed_days"] > 330
+    assert summary["seasonal_planner"]["eligible_brand_count"] == 0
+    assert summary["seasonal_planner"]["eligible_message_count"] == 0
+    assert summary["occasions"] == {}
+    assert "330-day gate | 0 of 2 brands | n=0 broadcasts" in document
+    assert "No brand has 330 observed days yet" in document
+    assert "No explicit seasonal occasions met the evidence rule" in document
 
 
 def test_local_renderer_writes_both_verified_pngs(
@@ -477,6 +610,22 @@ def test_freeze_manifest_hashes_dashboard_heroes_and_finished_screenshots(tmp_pa
     assert manifest["metrics"]["seasonal_share"] == 15.0
     assert manifest["metrics"]["seasonal_offer_share"] == 73.5
     assert manifest["metrics"]["cadence_coverage_brand_share"] == 100.0
+    assert manifest["metrics"]["update_contract"] == {
+        "current_through": "2026-07-14",
+        "schedule_hour_local": 7,
+        "schedule_minute_local": 0,
+        "incremental_overlap_days": 14,
+        "requires_mac_on_or_wake": True,
+    }
+    assert manifest["metrics"]["seasonal_planner"] == {
+        "minimum_observed_days": 330,
+        "eligible_brand_count": 10,
+        "total_brand_count": 10,
+        "eligible_message_count": 1260,
+        "eligible_brands": sorted(
+            (row["brand"] for row in summary["brands"]), key=str.casefold
+        ),
+    }
     assert manifest["metrics"]["quadrants"]["Evergreen content"] == {
         "count": 580,
         "percentage": 46.0,
