@@ -88,6 +88,7 @@ def run_fresh_install(source: str, ref: str, *, python: str) -> dict[str, object
 
         _run(["git", "clone", "--no-hardlinks", source, str(checkout)])
         _run(["git", "checkout", "--detach", ref], cwd=checkout)
+        expected_git_sha = _capture(["git", "rev-parse", "HEAD"], cwd=checkout).strip()
         _run([python, "-m", "venv", str(environment)])
         installed_python = environment / "bin" / "python"
         _run([str(installed_python), "-m", "pip", "install", "."], cwd=checkout)
@@ -110,6 +111,13 @@ def run_fresh_install(source: str, ref: str, *, python: str) -> dict[str, object
                 [*base, command, "--data-root", str(data_root), "--json"],
                 cwd=root,
                 env=command_env,
+            )
+
+        freeze_path = data_root / "demo" / "freeze-manifest.json"
+        freeze = json.loads(freeze_path.read_text(encoding="utf-8"))
+        if freeze.get("git_sha") != expected_git_sha or freeze.get("git_dirty") is not False:
+            raise RuntimeError(
+                "fresh install freeze is not bound to the clean immutable checkout"
             )
 
         forbidden = [
@@ -143,6 +151,9 @@ def run_fresh_install(source: str, ref: str, *, python: str) -> dict[str, object
             "passed": True,
             "source": source,
             "ref": ref,
+            "git_sha": expected_git_sha,
+            "freeze_git_sha": freeze.get("git_sha"),
+            "freeze_git_clean": freeze.get("git_dirty") is False,
             "commands": ["doctor", "demo", "build", "verify"],
             "production_data_created": False,
             "credentials_requested": False,

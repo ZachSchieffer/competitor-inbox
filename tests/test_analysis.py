@@ -16,6 +16,7 @@ from competitor_inbox.analysis import (
     AnthropicIntentClassifier,
     analyze_message,
     analyze_normalized_messages,
+    classify_scope_evidence,
     classify_seasonality,
     extract_offers,
     numeric_offer_is_supported,
@@ -42,6 +43,51 @@ def test_numeric_offer_requires_context_and_retains_exact_evidence() -> None:
         "deterministic": True,
     }
     assert all(candidate.get("depth") != 30 for candidate in offer["candidates"])
+
+
+def test_numeric_offer_support_rejects_depth_that_disagrees_with_evidence() -> None:
+    record = {
+        "subject": "Save 10% today",
+        "offer": {
+            "primary": {
+                "type": "%off",
+                "depth": 20.0,
+                "source": "subject",
+                "evidence": "Save 10%",
+                "deterministic": True,
+            },
+            "candidates": [],
+        },
+    }
+
+    assert numeric_offer_is_supported(record) is False
+
+
+@pytest.mark.parametrize(
+    "subject",
+    (
+        "Get 20% more protein",
+        "Enjoy 30% more hydration",
+        "Take 10% less time",
+        "Score 15% higher on recovery",
+        "Claim 20% market share",
+        "Save 20% water",
+    ),
+)
+def test_percent_metrics_do_not_become_offers(subject: str) -> None:
+    offer = extract_offers(subject, "A product update", "Read the details.")
+
+    assert offer["present"] is False
+    assert offer["primary"] is None
+
+
+@pytest.mark.parametrize("subject", ("Save 20%", "Get 20% off today"))
+def test_percent_offer_verbs_preserve_real_discount_claims(subject: str) -> None:
+    offer = extract_offers(subject, "Offer details", "The event ends tonight.")
+
+    assert offer["present"] is True
+    assert offer["primary"]["type"] == "%off"
+    assert offer["primary"]["depth"] == 20.0
     assert all(candidate.get("depth") != 49 for candidate in offer["candidates"])
 
 
@@ -54,6 +100,220 @@ def test_bare_product_numbers_never_become_discount_depths() -> None:
 
     assert offer["present"] is False
     assert offer["primary"] is None
+
+
+def test_campaign_offer_rules_ignore_standing_policies_and_named_sets() -> None:
+    standing_policy = extract_offers(
+        "The weekly edit",
+        "Three current favorites",
+        "A product story. " + "x" * 600 + " Free shipping on all orders. Terms apply.",
+    )
+    named_set = extract_offers(
+        "Meet the Citrus Set",
+        "A new product format",
+        "The Citrus Bundle contains three full-size products.",
+    )
+
+    assert standing_policy["present"] is False
+    assert named_set["present"] is False
+
+
+def test_specific_offer_evidence_outranks_generic_sale_language() -> None:
+    numeric = extract_offers(
+        "The annual sale starts now",
+        "Save 35% through tonight",
+        "Sale details and terms.",
+    )
+    gift = extract_offers(
+        "The spring sale",
+        "Up to 3 free gifts",
+        "Choose a complimentary gift with a qualifying purchase.",
+    )
+    shipping = extract_offers(
+        "Weekend event",
+        "Free shipping today",
+        "The sale applies to select products.",
+    )
+
+    assert numeric["primary"]["type"] == "%off"
+    assert numeric["primary"]["depth"] == 35.0
+    assert gift["primary"]["type"] == "gift"
+    assert shipping["primary"]["type"] == "free_shipping"
+
+
+def test_bogo_structure_outranks_its_embedded_percentage() -> None:
+    structured = extract_offers(
+        "BOGO weekend",
+        "Buy one, get one 40% off",
+        "The paired-item offer ends tonight.",
+    )
+    quantity = extract_offers(
+        "A paired-item event",
+        "Buy 2, get 1 free",
+        "The benefit applies at checkout.",
+    )
+
+    assert structured["primary"]["type"] == "bogo"
+    assert any(
+        candidate["type"] == "%off" and candidate["depth"] == 40.0
+        for candidate in structured["candidates"]
+    )
+    assert quantity["primary"]["type"] == "bogo"
+
+
+def test_qualitative_offers_require_campaign_lead_evidence() -> None:
+    gift = extract_offers(
+        "A reward for your next order",
+        "Free travel case with an order over the qualifying amount",
+        "Choose your color at checkout.",
+    )
+    trial = extract_offers(
+        "Try it at home",
+        "A risk-free trial",
+        "Return it within the stated window if it is not a fit.",
+    )
+    qualitative_save = extract_offers(
+        "Save on the summer edit",
+        "A limited campaign",
+        "Shop the current assortment.",
+    )
+
+    assert gift["primary"]["type"] == "gift"
+    assert trial["primary"]["type"] == "other"
+    assert qualitative_save["primary"]["type"] == "other"
+
+
+def test_gift_and_risk_free_rules_require_active_benefit_language() -> None:
+    urgent_gift = extract_offers(
+        "Ends tonight: Free travel pouch",
+        "A limited campaign",
+        "Browse the current assortment.",
+    )
+    threshold_gift = extract_offers(
+        "A thank-you event",
+        "A complimentary mini on orders $75+",
+        "Choose a qualifying item.",
+    )
+    guarantee = extract_offers(
+        "Try it at home",
+        "A 30-day money-back guarantee",
+        "The return window begins on delivery.",
+    )
+    unavailable = extract_offers(
+        "A policy update",
+        "The risk-free trial is not available in every region",
+        "Read the eligibility rules.",
+    )
+
+    assert urgent_gift["primary"]["type"] == "gift"
+    assert threshold_gift["primary"]["type"] == "gift"
+    assert guarantee["primary"]["type"] == "other"
+    assert unavailable["present"] is False
+
+
+def test_gift_merchandising_does_not_become_a_gift_with_purchase() -> None:
+    holiday_merchandising = extract_offers(
+        "Holiday gifts on sale",
+        "Shop the gift edit",
+        "Choose a gift for someone on your list.",
+    )
+    spring_merchandising = extract_offers(
+        "Spring sale",
+        "Choose a gift for Mom",
+        "Browse the current collection.",
+    )
+    editorial_ideas = extract_offers(
+        "Free gift ideas",
+        "A guide for the season",
+        "Browse the editorial edit.",
+    )
+
+    assert holiday_merchandising["primary"]["type"] == "other"
+    assert spring_merchandising["primary"]["type"] == "other"
+    assert editorial_ideas["present"] is False
+    assert all(
+        candidate["type"] != "gift"
+        for offer in (holiday_merchandising, spring_merchandising)
+        for candidate in offer["candidates"]
+    )
+
+
+def test_offer_vocabulary_requires_an_active_campaign_benefit() -> None:
+    informational_deals = extract_offers(
+        "Help us tailor your updates",
+        "A short preference survey",
+        "Answer a few questions so we can send relevant deals and information.",
+    )
+    charitable_sales = extract_offers(
+        "The community set returns",
+        "All sales support a local nonprofit",
+        "Shop the returning set.",
+    )
+    standing_shipping = extract_offers(
+        "The weekly journal",
+        "A new editorial dispatch",
+        "Free shipping plus a starter sample on orders $80+ or a deluxe sample on orders $120+.",
+    )
+    limited_offer = extract_offers(
+        "A two-step routine",
+        "Softer skin in two steps",
+        "Limited time offer. Browse the current duo.",
+    )
+
+    assert informational_deals["present"] is False
+    assert charitable_sales["present"] is False
+    assert standing_shipping["present"] is False
+    assert limited_offer["primary"]["type"] == "other"
+
+
+def test_footer_disclaimers_and_standing_perks_are_not_campaign_offers() -> None:
+    final_sale_policy = extract_offers(
+        "The weekly edit",
+        "Three current favorites",
+        "Select items final sale.",
+    )
+    combination_policy = extract_offers(
+        "A product update",
+        "Read the details",
+        "Discounts cannot be combined with other benefits.",
+    )
+    standalone_perk = extract_offers(
+        "An advisor's picks",
+        "A curated assortment",
+        "Watch the edit\nFree Shipping\nEarn rewards",
+    )
+    membership_perk = extract_offers(
+        "Membership news",
+        "Program details",
+        "Membership perks include free shipping and returns.",
+    )
+    active_terms = extract_offers(
+        "Save 20% today",
+        "Terms apply",
+        "The campaign ends tonight.",
+    )
+
+    assert final_sale_policy["present"] is False
+    assert combination_policy["present"] is False
+    assert standalone_perk["present"] is False
+    assert membership_perk["present"] is False
+    assert active_terms["primary"]["type"] == "%off"
+
+
+def test_quoted_printable_spacing_preserves_numeric_offer_evidence() -> None:
+    visible_text = "Members enjoy=C2=A020% OFF the current assortment."
+    offer = extract_offers("A member update", "", visible_text)
+
+    assert offer["primary"]["type"] == "%off"
+    assert offer["primary"]["depth"] == 20.0
+    assert offer["primary"]["evidence"] == "=C2=A020% OFF"
+    assert numeric_offer_is_supported(
+        {
+            "visible_text": visible_text,
+            "primary_offer": offer["primary"],
+            "offer_candidates": offer["candidates"],
+        }
+    )
 
 
 def test_seasonality_requires_language_and_uses_date_only_to_confirm() -> None:
@@ -70,6 +330,231 @@ def test_seasonality_requires_language_and_uses_date_only_to_confirm() -> None:
 
     wrong_window = classify_seasonality("Summer collection preview", "", "", "2025-12-10")
     assert wrong_window["seasonal"] is False
+
+
+def test_retail_calendar_language_maps_to_the_specific_occasion() -> None:
+    new_year = classify_seasonality(
+        "The best way to start the year", "A January plan", "", "2026-01-02"
+    )
+    holiday = classify_seasonality(
+        "Super Saturday starts now", "Free shipping today", "", "2025-12-20"
+    )
+    mothers_day = classify_seasonality(
+        "A note for Mother’s Day", "Shop the gift edit", "", "2026-05-01"
+    )
+
+    assert new_year["occasion"] == "New Year"
+    assert holiday["occasion"] == "Holiday gifting"
+    assert mothers_day["occasion"] == "Mother's Day"
+
+
+def test_generic_gift_language_is_calendar_gated() -> None:
+    outside_window = classify_seasonality(
+        "Shop gifts", "A gift guide", "", "2026-05-01"
+    )
+    holiday_window = classify_seasonality(
+        "Shop gifts", "A gift guide", "", "2026-11-15"
+    )
+
+    assert outside_window["seasonal"] is False
+    assert holiday_window["occasion"] == "Holiday gifting"
+
+
+def test_holiday_gifts_is_an_explicit_date_independent_occasion() -> None:
+    result = classify_seasonality(
+        "Holiday gifts have arrived", "Shop the collection", "", "2026-03-15"
+    )
+
+    assert result["seasonal"] is True
+    assert result["occasion"] == "Holiday gifting"
+    assert result["source"] == "subject"
+
+
+@pytest.mark.parametrize("observed_at", ("2026-01-15", "2026-12-15"))
+def test_generic_mom_gift_guide_is_not_seasonal_outside_april_or_may(
+    observed_at: str,
+) -> None:
+    result = classify_seasonality(
+        "Mom gift guide", "Gifts for Mom", "Browse the edit.", observed_at
+    )
+
+    assert result["seasonal"] is False
+
+
+@pytest.mark.parametrize("observed_at", ("2026-04-15", "2026-05-15"))
+def test_generic_mom_gift_guide_maps_to_mothers_day_in_window(
+    observed_at: str,
+) -> None:
+    result = classify_seasonality(
+        "Mom gift guide", "Gifts for Mom", "Browse the edit.", observed_at
+    )
+
+    assert result["seasonal"] is True
+    assert result["occasion"] == "Mother's Day"
+
+
+def test_explicit_holiday_language_overrides_generic_mom_gift_guard() -> None:
+    result = classify_seasonality(
+        "Holiday gifts for Mom", "Mom gift guide", "", "2026-03-15"
+    )
+
+    assert result["seasonal"] is True
+    assert result["occasion"] == "Holiday gifting"
+
+
+def test_intent_weights_campaign_lead_over_footer_boilerplate() -> None:
+    education = analyze_message(
+        {
+            "scope": "broadcast",
+            "subject": "How non-toxic materials are tested",
+            "preheader": "The science behind the product",
+            "visible_text": "A testing guide. " + "x" * 500 + " A note from our founder.",
+        }
+    )
+    endorsement = analyze_message(
+        {
+            "scope": "broadcast",
+            "subject": "The style advisor's picks",
+            "preheader": "A community edit",
+            "visible_text": "Three products selected by an independent advisor.",
+        }
+    )
+    seasonal_edit = analyze_message(
+        {
+            "scope": "broadcast",
+            "subject": "In case you forgot",
+            "preheader": "Shop Mother’s Day gifts",
+            "visible_text": "A gift edit for the occasion.",
+            "canonical_received_at": "2026-05-01T08:00:00Z",
+        }
+    )
+
+    assert education["intent"]["label"] == "Ingredient/education"
+    assert endorsement["intent"]["label"] == "Social proof/UGC"
+    assert seasonal_edit["intent"]["label"] == "Lifestyle/seasonal"
+
+
+def test_launch_synonyms_do_not_require_the_word_launch() -> None:
+    coming_soon = analyze_message(
+        {
+            "scope": "broadcast",
+            "subject": "Coming soon: a new retail partner",
+            "visible_text": "Mark the release date.",
+        }
+    )
+    reimagined = analyze_message(
+        {
+            "scope": "broadcast",
+            "subject": "A familiar ritual",
+            "preheader": "The daily format, reimagined",
+            "visible_text": "Meet the updated product.",
+        }
+    )
+
+    assert coming_soon["intent"]["label"] == "New product launch"
+    assert reimagined["intent"]["label"] == "New product launch"
+
+
+def test_high_signal_launch_and_social_proof_phrases_beat_the_fallback() -> None:
+    arrived = analyze_message(
+        {
+            "campaign_id": "synthetic-arrival",
+            "subject": "New daily capsule is here",
+            "visible_text": "Explore the current colors.",
+        }
+    )
+    new_option = analyze_message(
+        {
+            "campaign_id": "synthetic-new-option",
+            "subject": "Choose your format",
+            "visible_text": "You can now choose a compact size for travel.",
+        }
+    )
+    endorsement = analyze_message(
+        {
+            "campaign_id": "synthetic-endorsement",
+            "subject": "The essentials our editor swears by",
+            "visible_text": "Browse the selected pieces.",
+        }
+    )
+    community_proof = analyze_message(
+        {
+            "campaign_id": "synthetic-community-proof",
+            "subject": "A customer favorite returns",
+            "visible_text": "Read the community notes.",
+        }
+    )
+    merchandising = analyze_message(
+        {
+            "campaign_id": "synthetic-routine",
+            "subject": "Replace four products with one routine",
+            "visible_text": "Shop the system.",
+        }
+    )
+
+    assert arrived["intent"]["label"] == "New product launch"
+    assert new_option["intent"]["label"] == "New product launch"
+    assert endorsement["intent"]["label"] == "Social proof/UGC"
+    assert community_proof["intent"]["label"] == "Social proof/UGC"
+    assert merchandising["intent"]["label"] == "Featured products"
+
+
+def test_season_drop_subject_is_classified_as_a_product_launch() -> None:
+    analyzed = analyze_message(
+        {
+            "campaign_id": "synthetic-season-drop",
+            "subject": "Our boldest drop of the season",
+            "visible_text": "Explore the newly released flavors.",
+        }
+    )
+
+    assert analyzed["intent"]["label"] == "New product launch"
+
+
+def test_strong_content_intent_is_not_overridden_by_a_secondary_body_offer() -> None:
+    lifecycle_lesson = analyze_message(
+        {
+            "subject": "Welcome: want to learn with us?",
+            "visible_text": (
+                "Use code WELCOME15 for 15% off your first order. "
+                "The science guide explains why daily fiber matters."
+            ),
+        }
+    )
+    broadcast_lesson = analyze_message(
+        {
+            "campaign_id": "synthetic-broadcast-lesson",
+            "subject": "What are adaptogens?",
+            "visible_text": (
+                "A practical ingredient guide. Subscribe and save 15% on recurring orders."
+            ),
+        }
+    )
+
+    assert lifecycle_lesson["scope"] == "lifecycle"
+    assert lifecycle_lesson["intent"]["label"] == "Ingredient/education"
+    assert lifecycle_lesson["offer"]["primary"]["type"] == "%off"
+    assert broadcast_lesson["scope"] == "broadcast"
+    assert broadcast_lesson["intent"]["label"] == "Ingredient/education"
+
+    late_launch_offer = analyze_message(
+        {
+            "campaign_id": "synthetic-launch-with-footer",
+            "subject": "First look at the new daily format",
+            "visible_text": "A newly available option. " + "x" * 450 + " Save 15% today.",
+        }
+    )
+    promotion_led = analyze_message(
+        {
+            "campaign_id": "synthetic-promotion-led",
+            "subject": "Save 20% today",
+            "visible_text": "A science guide explains the material.",
+        }
+    )
+
+    assert late_launch_offer["offer"]["primary"]["type"] == "%off"
+    assert late_launch_offer["intent"]["label"] == "New product launch"
+    assert promotion_led["intent"]["label"] == "Promotion/offer"
 
 
 def test_curated_export_preserves_nonnumeric_annotations_in_canonical_records() -> None:
@@ -309,6 +794,97 @@ def test_scope_keeps_lifecycle_out_of_broadcast_metrics() -> None:
     assert summary["scope_counts"] == {"broadcast": 1, "lifecycle": 1, "uncertain": 0}
 
 
+def test_welcome_offer_with_apply_code_remains_lifecycle() -> None:
+    scope = classify_scope_evidence(
+        "Welcome to Northstar",
+        "Apply code WELCOME15 at checkout",
+        "Your first-order code is ready.",
+        bulk_or_list=True,
+    )
+
+    assert scope == ("lifecycle", "lifecycle:welcome", 0.96)
+
+
+def test_acquisition_eligibility_alone_does_not_create_lifecycle_scope() -> None:
+    subject_offer = classify_scope_evidence(
+        "First-order discount: 20% off",
+        "An invitation for new customers",
+        "Join the program to claim the offer.",
+        bulk_or_list=True,
+    )
+    body_offer = classify_scope_evidence(
+        "A membership invitation",
+        "Program details",
+        "First-order offer: save 20% after joining.",
+        bulk_or_list=True,
+    )
+    recipient_state = classify_scope_evidence(
+        "An account update",
+        "Your benefit is ready",
+        "Your first-order code is ready.",
+        bulk_or_list=True,
+    )
+
+    assert subject_offer == ("broadcast", "bulk_or_list_header", 0.96)
+    assert body_offer == ("broadcast", "bulk_or_list_header", 0.96)
+    assert recipient_state == ("lifecycle", "lifecycle:welcome", 0.91)
+
+
+def test_generic_welcome_language_does_not_create_lifecycle_scope() -> None:
+    seasonal = classify_scope_evidence(
+        "Welcome to summer",
+        "The new edit is here",
+        "Shop the collection.",
+        bulk_or_list=True,
+    )
+    ordinary_phrase = classify_scope_evidence(
+        "A member event",
+        "You are welcome to save 20%",
+        "The offer ends tonight.",
+        bulk_or_list=True,
+    )
+
+    assert seasonal == ("broadcast", "bulk_or_list_header", 0.96)
+    assert ordinary_phrase == ("broadcast", "bulk_or_list_header", 0.96)
+
+
+@pytest.mark.parametrize(
+    ("subject", "body"),
+    (
+        ("Your receipt", "View details"),
+        ("Password changed", "A message for you"),
+        ("Invoice available", "View details"),
+        ("A message for you", "Read the update"),
+    ),
+)
+def test_unrecognized_nonbulk_messages_are_uncertain(subject: str, body: str) -> None:
+    scope = classify_scope_evidence(subject, "", body, bulk_or_list=False)
+
+    assert scope == ("uncertain", "ambiguous_nonbulk_message", 0.55)
+
+
+def test_positive_headerless_marketing_content_is_broadcast() -> None:
+    scope = classify_scope_evidence(
+        "Summer sale",
+        "Save 20% today",
+        "Shop the collection.",
+        bulk_or_list=False,
+    )
+
+    assert scope == ("broadcast", "marketing_content", 0.72)
+
+
+def test_recruiting_welcome_language_remains_a_broadcast() -> None:
+    scope = classify_scope_evidence(
+        "Welcome creators",
+        "Apply to join our ambassador program",
+        "Applications are open this week.",
+        bulk_or_list=True,
+    )
+
+    assert scope == ("broadcast", "bulk_or_list_header", 0.96)
+
+
 class _FakeMessages:
     def __init__(self) -> None:
         self.kwargs: dict = {}
@@ -335,6 +911,18 @@ class _FakeMessages:
 class _FakeClient:
     def __init__(self) -> None:
         self.messages = _FakeMessages()
+
+
+def test_existing_ai_cache_is_forced_private_before_read(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "external-cache"
+    cache_dir.mkdir()
+    cache_path = cache_dir / "intent-cache.json"
+    cache_path.write_text("{}", encoding="utf-8")
+    cache_path.chmod(0o644)
+
+    AnthropicIntentClassifier(cache_dir, client=_FakeClient())
+
+    assert cache_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_optional_ai_receives_only_sanitized_text_and_cannot_invent_depth(tmp_path: Path) -> None:

@@ -184,7 +184,7 @@ evidence from local and automated runs can be compared directly.
   about 351, but Gmail still throttled the approximately 4 GB raw transfer.
 - Status: complete; superseded by the approved existing-export route below.
 
-## 2026-07-14T11:18:00Z: Checkpoint A uses the existing swipe-file export
+## 2026-07-14T11:18:00Z: Checkpoint A rehearsal uses the existing swipe-file export
 
 - Authority: execution-order override allowing the existing dedicated-inbox
   export when it is faster than IMAP.
@@ -203,7 +203,8 @@ evidence from local and automated runs can be compared directly.
   across at least 45 observed days. The trusted export window is July 11, 2023
   through July 8, 2026. Nine lifecycle messages and 2 uncertain messages remain
   outside broadcast metrics.
-- Status: active and cleared for Phase 2.
+- Status: complete rehearsal; superseded by the complete IMAP source recorded
+  below.
 
 ## 2026-07-14T11:54:00Z: Curated annotations remain subordinate to evidence
 
@@ -216,7 +217,7 @@ evidence from local and automated runs can be compared directly.
   unsupported public claim.
 - Impact: all 642 offer classifications have visible evidence or a nonnumeric
   curated offer; numeric offer summaries use deterministic evidence only.
-- Status: active.
+- Status: complete rehearsal; superseded for the launch census.
 
 ## 2026-07-14T11:55:00Z: Multi-brand fallback is the only eligible hook
 
@@ -229,7 +230,8 @@ evidence from local and automated runs can be compared directly.
   and 90 observed days.
 - Impact: SKIMS, OLIPOP, Poppi, AG1, Liquid Death, and every other single-brand
   candidate are disqualified. Huel and Nike are absent from the export.
-- Status: active.
+- Status: complete rehearsal; superseded by the live multi-brand fallback
+  recorded below.
 
 ## 2026-07-14T11:56:00Z: Export caps cannot support volume-leader claims
 
@@ -241,7 +243,7 @@ evidence from local and automated runs can be compared directly.
   cadence.
 - Impact: the dashboard describes observed behavior and denominators without
   implying that a capped sample identifies the most frequent sender.
-- Status: active.
+- Status: complete rehearsal; the live IMAP source has no export cap.
 
 ## 2026-07-14T11:57:00Z: Checkpoint A runs without optional AI processing
 
@@ -264,9 +266,9 @@ evidence from local and automated runs can be compared directly.
   which is below the 10% limit. The promotion review found 0 unsupported
   numeric claims, and the privacy review found 0 recipient or personalized
   token leaks.
-- Impact: Phase 2 is cleared for Checkpoint A with the curated-export
-  limitation still attached to every finding.
-- Status: complete.
+- Impact: the rehearsal passed its QA gate. The live IMAP census receives a
+  separate 60-record review before Checkpoint B.
+- Status: complete rehearsal; superseded for launch evidence.
 
 ## 2026-07-14T11:59:00Z: Hero screenshots fail closed on visual corruption
 
@@ -289,10 +291,10 @@ evidence from local and automated runs can be compared directly.
   pixel audit, and manual image inspection for Checkpoint A instead.
 - Reason: the blocked navigation is a browser-tool security boundary, not a
   dashboard runtime error.
-- Impact: local interactive desktop/mobile browser QA remains a disclosed
-  Checkpoint A weakness. It must be repeated through an approved local serving
-  route before Checkpoint B.
-- Status: active.
+- Impact: Checkpoint A disclosed the missing interactive pass. The live
+  dashboard was later served only on `127.0.0.1` and verified at desktop and
+  mobile widths before Checkpoint B.
+- Status: complete.
 
 ## 2026-07-14T12:01:00Z: Final freeze binds to a clean immutable Git state
 
@@ -305,7 +307,8 @@ evidence from local and automated runs can be compared directly.
   from Git history or unreachable local objects.
 - Impact: Checkpoint A numbers, HTML, screenshots, census, and Git source state
   can be tied to one immutable manifest.
-- Status: complete.
+- Status: implementation complete; the clean `v1.0.0` tag and immutable
+  fresh-install evidence remain pending.
 
 ## 2026-07-14T12:23:02Z: Demo builds as one deterministic public package
 
@@ -397,3 +400,317 @@ evidence from local and automated runs can be compared directly.
   hash is also rewritten. A pre-change freeze without this contract must be
   rebuilt before it can pass verification.
 - Status: complete.
+
+## 2026-07-14T14:37:05Z: Complete IMAP evidence supersedes the export rehearsal
+
+- Authority: execution-order preference for the existing dedicated inbox when
+  a same-session 12-month backfill can finish.
+- Decision: use the completed read-only IMAP backfill as the launch source and
+  retain the curated export only as archived rehearsal evidence. Review all 876
+  observed sender domains, include 35 verified domains, and map them to the
+  canonical 37-brand DTC universe.
+- Reason: the live inbox provides a current, defined receipt window and removes
+  the export-cap limitation. Fuzzy matches remain excluded unless a human
+  review confirms the sender identity.
+- Impact: the full IMAP review cleared the Early Data Gate and established the
+  reviewed sender universe. Unreviewed sender domains stay outside every launch
+  denominator. Huel and Nike were not observed.
+- Status: historical source-selection decision. Its pre-hardening census was
+  superseded by the final canonical reprocessing entry below.
+
+## 2026-07-14T14:37:06Z: Unattributed failures force the multi-brand hook
+
+- Authority: complete error-accounted hook requirement.
+- Decision: preserve all 691 malformed source messages as unattributed parse
+  failures and label the source `partial`. Use the multi-brand fallback even
+  though several priority brands clear the message and day thresholds.
+- Reason: an unattributed failure cannot be proven irrelevant to a single-brand
+  claim. A portfolio census can disclose that limitation while a brand-specific
+  claim would overstate source completeness.
+- Impact: no priority brand powers the hook. The frozen launch hook uses the
+  full reviewed multi-brand denominator with the partial-coverage label visible
+  in the image.
+- Status: active decision; the final counts live only in the current canonical
+  census entry and freeze manifest.
+
+## 2026-07-14T14:39:19Z: Owner strategy labels require enough history
+
+- Authority: posture and annual-planning gates in the approved plan.
+- Decision: withhold posture labels below 30 qualified broadcasts or 90 observed
+  days. Build the Seasonal Planner only from brands with at least 330 observed
+  days.
+- Reason: a thin current-activity sample cannot support an owner-level strategic
+  posture or a prior-season planning claim.
+- Impact: every dashboard section carries its eligible denominator, and the
+  hero shows the current-through date, 7:00 AM local schedule, 14-day overlap,
+  and Mac-on dependency.
+- Status: active methodology; the final eligible count lives in the current
+  canonical census and freeze manifest.
+
+## 2026-07-14T14:41:38Z: Local desktop and mobile dashboard QA is complete
+
+- Authority: Checkpoint B responsive and network-isolation requirements.
+- Decision: serve the private dashboard on `127.0.0.1` for an interactive
+  desktop and 390 by 844 mobile pass, then stop the local server.
+- Reason: this tests the actual generated page without weakening the browser's
+  `file://` safety boundary or exposing the dashboard externally.
+- Impact: both views rendered without page-level horizontal overflow. The page
+  contained 0 scripts, 0 remote resource attributes, a restrictive CSP, 7
+  sections, the correct freshness badge, and the 330-day seasonal denominator.
+  The competitor table remains intentionally horizontally scrollable on mobile.
+- Status: complete.
+
+## 2026-07-14T14:42:00Z: Asana is an internal staging surface only
+
+- Authority: approved pre-Checkpoint-B staging boundary.
+- Decision: create the internal launch task in `Marketing - 2026 Content`, place
+  it in `Need to Organize`, assign Michelle Parada, and set Status to `Ready to
+  Post` and Type to the live `Linkedin` option.
+- Reason: the stable task URL is needed for final package wiring, but staging
+  cannot become distribution.
+- Impact: the task carries a hard zero-distribution notice. Final post copy,
+  images, the verified Notion URL, tag, and Bolu instructions replace the
+  staging note before Checkpoint B. No LinkedIn activity, DM, connection, or
+  announcement occurred.
+- Status: staged; final readback and attachment verification pending.
+
+## 2026-07-14T15:28:56Z: Independent QA invalidated the pre-hardening freeze
+
+- Authority: Phase 2 QA and zero-recipient-leak requirements.
+- Decision: invalidate the first live census for launch use and block its
+  numbers from downstream copy.
+- Evidence: an independent 60-record review across 31 brands and 30 promotions
+  found 33 record-level classification disagreements, including 20 hard-axis
+  disagreements. Numeric offer evidence produced 0 unsupported claims, but 11
+  full normalized records contained recipient or personalized-token residue.
+- Impact: the sanitizer, deterministic classifier, census, dashboard, and
+  launch freeze required a canonical rebuild from retained private raw mail.
+- Status: superseded by the remediations below. The detailed report remains
+  private and redacted.
+
+## 2026-07-14T15:28:57Z: Recipient sanitization now covers encoded short keys
+
+- Authority: production-data isolation and zero-recipient-leak requirements.
+- Decision: decode nested HTML entities and remove quoted-printable,
+  percent-encoded, query-string, and schemeless short-key tracking fragments
+  before persistence, optional AI processing, logging, or rendering.
+- Evidence: the corpus audit found 318 affected records and 1,727 encoded
+  short-key matches before remediation. Canonical reprocessing produced 0
+  high-confidence direct-identifier findings across the rebuilt private store.
+- Impact: no raw or normalized production content entered Git. The public
+  privacy audit now detects the same encoded tracking shapes.
+- Status: implementation complete; the regenerated independent sample supplies
+  final Checkpoint B evidence.
+
+## 2026-07-14T15:28:58Z: Deterministic classification is grounded in the lead
+
+- Authority: the 10% Phase 2 disagreement ceiling.
+- Decision: weight subject, preheader, and lead content above footer
+  boilerplate; narrow lifecycle triggers; suppress standing shipping-policy
+  and product-bundle false offers; and expand supported gift, trial, seasonal,
+  launch, testimonial, and ambassador evidence.
+- Evidence: the preserved labels-only ground truth was not edited. The updated
+  rules reduced disagreement from 33 of 60 to 2 of 60. Offer presence, primary
+  offer type, seasonality, and occasion produced 0 disagreements, and a
+  full-corpus dry reanalysis produced 0 errors and 0 unsupported numeric offers.
+- Impact: deterministic-only mode clears the approved disagreement ceiling
+  without sending source text to an external model.
+- Status: implementation complete; the regenerated independent sample remains
+  the final launch gate.
+
+## 2026-07-14T15:28:59Z: The hardened live census supersedes prior live counts
+
+- Authority: cross-foot, frozen-number, and Early Data Gate requirements.
+- Decision: use the canonically reprocessed and incrementally refreshed store
+  for every current denominator. Earlier live counts remain historical only.
+- Evidence: the current reviewed universe contains 3,860 parsed delivery
+  variants, 17 collapsed variants, and 3,843 distinct messages. Scope reconciles
+  to 3,754 qualified broadcasts, 88 lifecycle messages, and 1 uncertain
+  messages. The separate failure ledger preserves 691 parse failures. All
+  cross-foot checks and the Early Data Gate pass.
+- Impact: the launch remains on the multi-brand fallback because unattributed
+  failures prevent a complete error-accounted single-brand claim. The current
+  hero uses 3,843 emails from 33 contributing brands and visibly labels source
+  coverage as partial.
+- Status: current canonical QA corpus; a final clean tagged rebuild still
+  controls every distribution claim.
+
+## 2026-07-14T15:29:00Z: Incremental state separates corpus history from fetch
+
+- Authority: coverage-gate and 14-day-overlap requirements.
+- Decision: retain the earliest successful backfill start in `source_window`
+  and write the newest overlap request to `last_fetch_window` in both metadata
+  and state.
+- Reason: replacing a year-long corpus window with a 14-day request makes an
+  intact history appear ineligible for cadence, posture, and seasonal gates.
+- Impact: the reviewed source now covers July 14, 2025 through July 14, 2026,
+  while the latest fetch window remains separately auditable.
+- Status: implementation complete with a regression test and live readback.
+
+## 2026-07-14T15:29:01Z: Output publication is not power-loss transactional
+
+- Authority: truthful recovery and scheduler documentation requirements.
+- Decision: describe managed output files as individually atomic and caught
+  failures as package-restoring. Do not claim package-wide atomicity across an
+  abrupt shutdown.
+- Reason: power loss can occur between separate file replacements.
+- Impact: `verify` fails closed on a mixed generation,
+  `dashboard.previous.html` remains available, and the operator reruns `build`
+  followed by `verify` after restart.
+- Status: documented residual risk.
+
+## 2026-07-14T15:29:02Z: Installed builds resolve their source checkout
+
+- Authority: immutable-tag and clean-freeze requirements.
+- Decision: resolve pip's PEP 610 `direct_url.json` before cwd and source-tree
+  fallbacks when collecting Git state.
+- Reason: a regular `pip install .` places modules in `site-packages`, where
+  walking upward from `__file__` cannot find the release checkout.
+- Impact: production verification requires a 40-character Git SHA and
+  `git_dirty=false`; the fresh-install test requires the freeze SHA to match the
+  detached tag checkout.
+- Status: implementation and regression test complete; the remote-tag run
+  remains pending.
+
+## 2026-07-14T15:29:03Z: Repository privacy auditing covers hidden surfaces
+
+- Authority: zero-production-data public-history requirement.
+- Decision: remove filename-based trust for `.example` files and exempt only
+  reserved test-domain fixtures. Scan generated directories, caches,
+  filenames, encoded tracking fragments, LFS pointers, submodule manifests,
+  the index, all refs and blobs, and unreachable objects.
+- Impact: the final release also fetches remote heads, tags, and pull-request
+  refs and inventories GitHub releases and Actions artifacts before clearance.
+- Status: implementation and regression tests complete; the final private
+  deny-list audit and remote inventory remain pending.
+
+## 2026-07-14T15:29:04Z: Frozen numeric tokens retain their units
+
+- Authority: frozen-value and stale-count requirements.
+- Decision: preserve `$` and `%` in validator tokens, infer percentage units
+  from share, percentage, and rate metrics, and require units for static
+  operational numbers.
+- Reason: a count such as `33` must not authorize an unrelated `33%` claim.
+- Impact: counts, percentages, and currency no longer cross-authorize each
+  other.
+- Status: implementation and regression test complete; the assembled launch
+  package still requires the final validator pass.
+
+## 2026-07-14T15:29:05Z: Staging remains separate from distribution
+
+- Authority: approved pre-Checkpoint-B staging boundary.
+- Decision: keep the public repository, unlisted Notion site, and internal Asana
+  task as staging surfaces only. Search indexing and page duplication are off
+  on the Notion site.
+- Impact: no LinkedIn activity, DM, connection, announcement, or person-to-person
+  asset link has occurred. Final Notion copy, logged-out verification, Asana
+  wiring, and attachment readback still depend on the clean tagged freeze.
+- Status: active distribution lock.
+
+## 2026-07-14T15:29:06Z: Checkpoint B discloses every operating limit
+
+- Authority: approved Checkpoint B residual-risk requirements.
+- Decision: disclose that Gmail app passwords provide broad mailbox access;
+  Workspace policy may disable app passwords; optional AI sends sanitized text
+  to Anthropic; lifecycle classification contains judgment-error risk;
+  scheduled updates depend on the Mac being on or waking; inbox data shows
+  competitor behavior rather than performance; and an abrupt shutdown can
+  interrupt the per-file output sequence.
+- Status: mandatory for the final packet and relevant product documentation.
+
+## 2026-07-14T16:25:00Z: Privacy checks validate sanitized fields independently
+
+- Authority: zero-recipient-data and fail-closed parsing requirements.
+- Decision: validate the sanitized subject, preheader, and visible text as 3
+  separate fields instead of joining them before the final boundary check.
+- Reason: the join can manufacture a quoted-printable soft break when a safe
+  preheader ends in a literal equals sign and visible text follows after the
+  separator newline. Each stored field is already sanitized independently.
+- Impact: the parser still fails closed on unsafe content, while ordinary
+  equations and literal trailing equals signs remain intact. A regression test
+  covers this exact field-boundary case.
+- Status: implementation and regression test complete.
+
+## 2026-07-14T16:28:00Z: Reprocessing preserves the reviewed source window
+
+- Authority: 12-month backfill, denominator integrity, and frozen-window
+  requirements.
+- Decision: use the candidate's reviewed `defined_source.source_window` during
+  a canonical MIME reparse. Retained raw archives are lookup sources only and
+  cannot widen the candidate window.
+- Reason: the private archive roots span more history than the reviewed
+  12-month candidate. Unioning archive metadata would silently change the
+  denominator without adding records.
+- Impact: all 3,843 candidate records matched retained raw mail and reparsed,
+  while the source window remains July 14, 2025 through July 14, 2026.
+- Status: complete; the regenerated census and independent QA control the
+  release.
+
+## 2026-07-14T17:01:24Z: Recipient-safe text cleanup must reach a fixed point
+
+- Authority: absolute data isolation and zero-recipient-data requirements.
+- Decision: apply bounded residual cleanup until stable, redact rendered
+  greetings across common punctuation, and replace structurally detected
+  multi-line postal-address blocks before any normalized record persists.
+- Reason: malformed removed-link wrappers can expose a new unsafe layer only
+  after the outer wrapper is removed, and one lifecycle message contained a
+  repeated shipping-address block that single-token detectors could not see.
+- Impact: synthetic regressions cover nested wrappers, rendered greetings, and
+  postal blocks. An independent full-corpus scan checked all 3,843 records and
+  11,529 persisted text fields with 0 remaining direct identifiers, address
+  blocks, transfer payloads, tracking tails, markup residue, or non-idempotent
+  fields.
+- Status: implementation, public tests, and private full-corpus adversarial
+  review complete; canonical raw-mail reprocessing still controls release.
+
+## 2026-07-14T18:08:00Z: Ambiguous MIME and personalization fail closed
+
+- Authority: absolute data isolation and broadcast-metric integrity.
+- Decision: exclude every named or attached MIME leaf from analysis, unwrap
+  only an unambiguous forwarded message, and classify an ambiguous embedded
+  message or non-bulk message without marketing evidence as uncertain.
+- Decision: remove recipient addresses, names, international phone numbers,
+  postal addresses, order or tracking identifiers, nested transfer encodings,
+  and tracking links to a fixed point before persistence or optional AI use.
+- Evidence: the independent synthetic matrix passed 549 of 549 assertions
+  across 123 adversarial scenarios. The public suite passed all 261 tests.
+- Impact: 1 message in the final reviewed corpus remains uncertain and stays
+  outside all broadcast metrics.
+- Status: complete.
+
+## 2026-07-14T18:08:01Z: Numeric claims bind to their exact evidence
+
+- Authority: unsupported-numeric-claim prohibition.
+- Decision: a deterministic numeric offer is valid only when its cited source
+  contains the evidence and reparsing that exact evidence produces the same
+  offer type and depth.
+- Reason: a stored 20% depth must not be authorized by evidence that says 10%.
+- Impact: numeric offer summaries fail closed on mismatched evidence, even when
+  the claimed evidence string is present in the source field.
+- Status: complete with regression coverage.
+
+## 2026-07-14T18:08:02Z: Distribution numbers require semantic freeze bindings
+
+- Authority: no stale count or misapplied frozen number in a final artifact.
+- Decision: every quantitative claim in LinkedIn, the pinned comment, Notion,
+  and Asana declares named claim groups bound to explicit `metrics.*` fields.
+  Every numeral occurrence must be covered by a bound claim or an exact
+  reviewed operational context.
+- Reason: a number that exists somewhere in the freeze cannot authorize an
+  unrelated claim with the same value.
+- Impact: each launch finding binds its numerator and denominator separately;
+  a same-value, wrong-field adversarial claim fails validation.
+- Status: complete; public and private package tests pass.
+
+## 2026-07-14T18:08:03Z: The defined-source ledger follows final scope analysis
+
+- Authority: complete raw tables and cross-foot requirements.
+- Decision: after canonical reanalysis, rewrite the defined-source included
+  broadcast, lifecycle, and uncertain counts from the same final coverage
+  table used by the dashboard and launch freeze.
+- Reason: the source ledger previously retained a pre-reclassification scope
+  split even though the final total still cross-footed.
+- Impact: the defined-source ledger, Phase 1 coverage table, 4-quadrant census,
+  dashboard, hero images, and copy input now share the same 3,843-message
+  denominator and 3,754/88/1 scope split.
+- Status: complete; the candidate audit now rejects any future ledger drift.

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import mailbox
+import subprocess
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
@@ -9,8 +11,9 @@ from pathlib import Path
 import pytest
 
 import competitor_inbox.pipeline as pipeline_module
+import competitor_inbox.cli as cli_module
 from competitor_inbox.aggregate import aggregate_records
-from competitor_inbox.cli import _bind_coverage_integrity, build_parser, main
+from competitor_inbox.cli import _bind_coverage_integrity, _git_state, build_parser, main
 from competitor_inbox.config import AppConfig, SourceConfig, load_config, save_config
 from competitor_inbox.coverage import build_coverage_table, evaluate_early_data_gate
 from competitor_inbox.dashboard import generate_dashboard
@@ -46,6 +49,47 @@ def test_build_parser_preserves_ordered_launch_hero_brand_universe() -> None:
     )
 
     assert args.hero_priority_brand == ["SKIMS", "Olipop", "Poppi"]
+
+
+def test_git_state_uses_pip_direct_url_for_regular_install(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = tmp_path / "release"
+    release.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=release, check=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Release Test"], cwd=release, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "release-test@localhost"],
+        cwd=release,
+        check=True,
+    )
+    tracked = release / "release.txt"
+    tracked.write_text("v1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "release.txt"], cwd=release, check=True)
+    subprocess.run(["git", "commit", "-qm", "release"], cwd=release, check=True)
+    expected = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=release,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    class InstalledDistribution:
+        @staticmethod
+        def read_text(name: str) -> str | None:
+            assert name == "direct_url.json"
+            return json.dumps({"dir_info": {}, "url": release.as_uri()})
+
+    monkeypatch.setattr(cli_module, "distribution", lambda _name: InstalledDistribution())
+    monkeypatch.chdir(tmp_path)
+
+    assert _git_state() == (expected, False)
+    tracked.write_text("dirty\n", encoding="utf-8")
+    assert _git_state() == (expected, True)
 
 
 def _write_mbox(path: Path, count: int = 300) -> None:
@@ -128,6 +172,68 @@ def test_mbox_pipeline_passes_gate_analyzes_and_renders(tmp_path: Path) -> None:
     assert "Content-Security-Policy" in text
     assert "<script" not in text.casefold()
     assert "https://" not in text.casefold()
+
+
+def test_incremental_ingest_preserves_full_backfill_window(tmp_path: Path) -> None:
+    mbox_path = tmp_path / "research.mbox"
+    _write_mbox(mbox_path, count=1)
+    config = AppConfig(
+        data_root=tmp_path / "private",
+        source=SourceConfig(mode="mbox", mbox_path=str(mbox_path)),
+    )
+
+    ingest(config, months=12, now=NOW)
+    store = MasterStore(config.data_root)
+    initial = store.load_document()["metadata"]["source_window"]
+
+    later = NOW + timedelta(days=1)
+    ingest(config, incremental=True, now=later)
+    metadata = store.load_document()["metadata"]
+    state = store.read_state("ingestion")
+
+    assert metadata["source_window"]["start"] == initial["start"]
+    assert metadata["source_window"]["end"] == later.isoformat().replace("+00:00", "Z")
+    assert metadata["last_fetch_window"]["start"] == (
+        NOW - timedelta(days=14)
+    ).isoformat().replace("+00:00", "Z")
+    assert metadata["last_fetch_window"]["end"] == later.isoformat().replace(
+        "+00:00", "Z"
+    )
+    assert state["source_window_start"] == initial["start"]
+    assert state["source_window_end"] == later.isoformat().replace("+00:00", "Z")
+    assert state["last_fetch_window_start"] == metadata["last_fetch_window"]["start"]
+    assert state["last_fetch_window_end"] == metadata["last_fetch_window"]["end"]
+
+
+def test_shorter_nonincremental_backfill_preserves_retained_history_window(
+    tmp_path: Path,
+) -> None:
+    mbox_path = tmp_path / "research.mbox"
+    _write_mbox(mbox_path, count=1)
+    config = AppConfig(
+        data_root=tmp_path / "private",
+        source=SourceConfig(mode="mbox", mbox_path=str(mbox_path)),
+    )
+
+    ingest(config, months=12, now=NOW)
+    store = MasterStore(config.data_root)
+    initial = store.load_document()["metadata"]["source_window"]
+
+    later = NOW + timedelta(days=1)
+    ingest(config, months=1, incremental=False, now=later)
+    metadata = store.load_document()["metadata"]
+
+    assert metadata["source_window"]["start"] == initial["start"]
+    assert metadata["source_window"]["end"] == later.isoformat().replace("+00:00", "Z")
+    assert metadata["last_fetch_window"]["start"] == calendar_months_ago(
+        later,
+        1,
+        config.analysis.timezone,
+    ).isoformat().replace("+00:00", "Z")
+    assert metadata["last_fetch_window"]["end"] == later.isoformat().replace(
+        "+00:00",
+        "Z",
+    )
 
 
 def test_source_failure_preserves_master_outputs_and_last_success(
@@ -257,7 +363,7 @@ def test_unknown_parse_failure_disqualifies_single_brand_hook() -> None:
                 "sender_name": "Northstar",
                 "sender_domain": "northstar.example",
                 "scope": "broadcast",
-                "scope_reason": "bulk-list-evidence",
+                "scope_reason": "bulk_or_list_header",
                 "scope_confidence": 1.0,
                 "subject": f"Campaign {index}",
                 "preheader": "",

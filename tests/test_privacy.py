@@ -26,7 +26,7 @@ def init_repo(path: Path) -> Path:
     return path
 
 
-def test_safe_repository_passes_and_example_is_reported_separately(tmp_path: Path) -> None:
+def test_safe_repository_passes_with_reserved_fixture_address(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
     (repo / "README.md").write_text("Synthetic dashboard code only.\n", encoding="utf-8")
     synthetic_address = "demo" + "@" + "example.test"
@@ -39,10 +39,27 @@ def test_safe_repository_passes_and_example_is_reported_separately(tmp_path: Pat
     assert report["ok"] is True
     assert report["violation_count"] == 0
     assert report["synthetic_finding_count"] >= 1
-    assert report["synthetic_example_finding_count"] >= 1
+    assert report["synthetic_example_finding_count"] == 0
+    assert report["reserved_fixture_finding_count"] >= 1
     assert all(
         row["path"] == "config.example" for row in report["synthetic_findings"]
     )
+
+
+def test_example_filename_does_not_exempt_real_secrets(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    real_address = "owner" + "@" + "private.corp"
+    private_token = "sk-ant-" + "A" * 24
+    (repo / "config.example").write_text(
+        f"account = '{real_address}'\ntoken = '{private_token}'\n",
+        encoding="utf-8",
+    )
+
+    report = privacy_audit.scan_repository(repo)
+    rule_ids = {row["rule_id"] for row in report["violations"]}
+
+    assert report["ok"] is False
+    assert {"email_address", "anthropic_key"} <= rule_ids
 
 
 def test_audit_redacts_match_and_sensitive_path(tmp_path: Path) -> None:
@@ -61,6 +78,89 @@ def test_audit_redacts_match_and_sensitive_path(tmp_path: Path) -> None:
     assert private_value not in serialized
     assert any(
         str(row["path"]).startswith("<redacted-path:")
+        for row in report["violations"]
+    )
+
+
+def test_audit_treats_sensitive_filename_as_a_violation(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    private_value = "owner" + "@" + "private.corp"
+    (repo / f"archive-{private_value}.txt").write_text(
+        "safe body with no identifiers\n", encoding="utf-8"
+    )
+
+    report = privacy_audit.scan_repository(repo)
+
+    assert report["ok"] is False
+    assert "email_address_in_path" in {
+        row["rule_id"] for row in report["violations"]
+    }
+    assert private_value not in json.dumps(report)
+
+
+def test_audit_scans_cache_directories_instead_of_skipping_them(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    cache = repo / ".pytest_cache"
+    cache.mkdir()
+    private_token = "sk-ant-" + "A" * 24
+    (cache / "state").write_text(private_token, encoding="utf-8")
+
+    report = privacy_audit.scan_repository(repo)
+
+    assert report["ok"] is False
+    assert any(
+        row["path"] == ".pytest_cache/state"
+        and row["rule_id"] == "anthropic_key"
+        for row in report["violations"]
+    )
+
+
+def test_audit_fails_closed_on_lfs_pointers_and_submodules(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    (repo / "asset.bin").write_text(
+        "version https://git-lfs.github.com/spec/v1\n"
+        "oid sha256:" + "a" * 64 + "\nsize 123\n",
+        encoding="utf-8",
+    )
+    (repo / ".gitmodules").write_text(
+        '[submodule "private"]\n\tpath = private\n\turl = ../private.git\n',
+        encoding="utf-8",
+    )
+
+    report = privacy_audit.scan_repository(repo)
+    rules = {row["rule_id"] for row in report["violations"]}
+
+    assert {"git_lfs_pointer", "submodule_manifest"} <= rules
+
+
+def test_audit_fails_closed_on_gitlink_without_gitmodules(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    (repo / "README.md").write_text("public code\n", encoding="utf-8")
+    git(repo, "add", "README.md")
+    git(repo, "commit", "-qm", "initial")
+    target = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    git(repo, "update-index", "--add", "--cacheinfo", "160000", target, "vendor/private")
+    git(repo, "commit", "-qm", "add bare gitlink")
+
+    report = privacy_audit.scan_repository(repo)
+
+    assert report["ok"] is False
+    assert "submodule_gitlink" in {
+        row["rule_id"] for row in report["violations"]
+    }
+
+
+def test_audit_fails_closed_on_directory_symlink(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (repo / "private-data").symlink_to(outside, target_is_directory=True)
+
+    report = privacy_audit.scan_repository(repo)
+
+    assert report["ok"] is False
+    assert any(
+        row["path"] == "private-data" and row["rule_id"] == "symlink_not_allowed"
         for row in report["violations"]
     )
 
@@ -128,6 +228,53 @@ def test_audit_inventories_reviewable_assets_without_exposing_content(tmp_path: 
     assert report["assets_for_manual_review"][0]["sha256"] == __import__(
         "hashlib"
     ).sha256(payload).hexdigest()
+
+
+def test_audit_detects_encoded_and_schemeless_recipient_tracking_fragments(
+    tmp_path: Path,
+) -> None:
+    repo = init_repo(tmp_path / "repo")
+    opaque_value = "private-recipient-value"
+    qp_fragment = "r" + "=3" + "D" + opaque_value
+    short_qp_fragment = "k" + "=3" + "D" + "0"
+    schemeless_cluster = (
+        "k" + "=" + "private-campaign-value" + "&" + "m" + "=" + opaque_value
+    )
+    (repo / "leak.txt").write_text(
+        qp_fragment + "\n" + short_qp_fragment + "\n" + schemeless_cluster,
+        encoding="utf-8",
+    )
+
+    report = privacy_audit.scan_repository(repo)
+    serialized = json.dumps(report)
+
+    assert report["ok"] is False
+    assert "recipient_tracking_fragment" in {
+        row["rule_id"] for row in report["violations"]
+    }
+    assert opaque_value not in serialized
+
+
+def test_audit_detects_opaque_standalone_short_tracking_fragments(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    fragments = (
+        "r" + "=" + "opaque-recipient-value",
+        "k" + "=" + "abcDEF1234567890",
+        "r" + "=" + "rate",
+    )
+    (repo / "leak.txt").write_text(
+        "\n".join(fragments) + "\n",
+        encoding="utf-8",
+    )
+
+    report = privacy_audit.scan_repository(repo)
+
+    assert report["ok"] is False
+    rows = [
+        row for row in report["violations"]
+        if row["rule_id"] == "recipient_tracking_fragment"
+    ]
+    assert len({row["match_hash"] for row in rows}) == 2
 
 
 def test_package_validator_accepts_a_frozen_partial_artifact(tmp_path: Path) -> None:
@@ -322,6 +469,15 @@ def _complete_package(tmp_path: Path) -> Path:
                 "kind": kind,
                 "path": path.name,
                 "allowed_numbers": [300] if kind in {"linkedin_post", "notion"} else [],
+                **(
+                    {
+                        "claim_bindings": ["qualified_broadcasts"]
+                        if kind in {"linkedin_post", "notion"}
+                        else []
+                    }
+                    if kind in {"linkedin_post", "pinned_comment", "notion", "asana"}
+                    else {}
+                ),
             }
         )
 
@@ -394,10 +550,15 @@ def _complete_package(tmp_path: Path) -> Path:
                 "frozen_claims": [
                     {
                         "name": "qualified_broadcasts",
-                        "expected": 300,
-                        "freeze_field": "metrics.qualified_broadcasts",
                         "pattern": "(?P<value>\\d+) qualified broadcasts",
                         "artifacts": ["linkedin_post", "notion"],
+                        "bindings": {
+                            "value": {
+                                "expected": 300,
+                                "freeze_field": "metrics.qualified_broadcasts",
+                                "format": "number",
+                            }
+                        },
                     }
                 ],
             }
@@ -577,7 +738,7 @@ def test_package_validator_binds_counts_and_images_to_freeze_manifest(
     for artifact in payload["artifacts"]:
         if artifact["kind"] in {"linkedin_post", "notion"}:
             artifact["allowed_numbers"] = [301]
-    payload["frozen_claims"][0]["expected"] = 301
+    payload["frozen_claims"][0]["bindings"]["value"]["expected"] = 301
     freeze = json.loads((tmp_path / "freeze.json").read_text(encoding="utf-8"))
     freeze["screenshots"][0]["sha256"] = "f" * 64
     (tmp_path / "freeze.json").write_text(json.dumps(freeze), encoding="utf-8")
@@ -644,11 +805,35 @@ def test_package_validator_requires_canonical_metrics_and_documented_static_numb
         },
     }
     (tmp_path / "freeze.json").write_text(json.dumps(freeze), encoding="utf-8")
+    post.write_text(
+        post.read_text(encoding="utf-8").replace(
+            "First-response coverage lasts 2 hours. ", ""
+        ),
+        encoding="utf-8",
+    )
+    post_contract["allowed_numbers"] = [300]
+    notion = tmp_path / "notion.txt"
+    notion.write_text(
+        notion.read_text(encoding="utf-8")
+        + "A failed gate exits with code 2.\n",
+        encoding="utf-8",
+    )
+    notion_contract = next(
+        item for item in payload["artifacts"] if item["kind"] == "notion"
+    )
+    notion_contract["allowed_numbers"] = [2, 300]
     payload["static_numbers"] = [
         {
             "value": 2,
             "kind": "operational",
             "reason": "Launch-window coverage in hours.",
+            "artifacts": [],
+            "uses": [
+                {
+                    "artifact": "notion",
+                    "pattern": r"(?m)^A failed gate exits with code (?P<value>2)\.$",
+                }
+            ],
         }
     ]
     manifest.write_text(json.dumps(payload), encoding="utf-8")
@@ -656,6 +841,118 @@ def test_package_validator_requires_canonical_metrics_and_documented_static_numb
     passed = validate_package.validate_manifest(manifest)
 
     assert passed["ok"] is True, passed
+
+
+def test_package_validator_does_not_use_brand_count_to_authorize_percentage(
+    tmp_path: Path,
+) -> None:
+    manifest = _complete_package(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    freeze_path = tmp_path / "freeze.json"
+    freeze = json.loads(freeze_path.read_text(encoding="utf-8"))
+    freeze["metrics"]["brand_count"] = 33
+    freeze["metrics"]["broadcast_brand_count"] = 33
+    freeze_path.write_text(json.dumps(freeze), encoding="utf-8")
+
+    post = tmp_path / "linkedin_post.txt"
+    post.write_text(
+        post.read_text(encoding="utf-8") + "Offer share was 33%.\n",
+        encoding="utf-8",
+    )
+    post_contract = next(
+        item for item in payload["artifacts"] if item["kind"] == "linkedin_post"
+    )
+    post_contract["allowed_numbers"] = [300, "33%"]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = validate_package.validate_manifest(manifest)
+    rules = {row["rule_id"] for row in report["issues"]}
+
+    assert "allowed_number_not_frozen_or_static" in rules
+
+
+def test_package_validator_binds_percentage_claim_to_share_metric(
+    tmp_path: Path,
+) -> None:
+    manifest = _complete_package(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    post = tmp_path / "linkedin_post.txt"
+    post.write_text(
+        post.read_text(encoding="utf-8") + "Offer share was 50%.\n",
+        encoding="utf-8",
+    )
+    contract = next(
+        item for item in payload["artifacts"] if item["kind"] == "linkedin_post"
+    )
+    contract["allowed_numbers"] = [300, "50%"]
+    contract["claim_bindings"].append("offer_share")
+    payload["frozen_claims"].append(
+        {
+            "name": "offer_share",
+            "pattern": r"Offer share was (?P<value>\d+(?:\.\d+)?%).",
+            "artifacts": ["linkedin_post"],
+            "bindings": {
+                "value": {
+                    "expected": "50%",
+                    "freeze_field": "metrics.offer_share",
+                    "format": "number",
+                }
+            },
+        }
+    )
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = validate_package.validate_manifest(manifest)
+
+    assert report["ok"] is True, report
+
+
+def test_package_validator_rejects_same_value_from_wrong_finding_metric(
+    tmp_path: Path,
+) -> None:
+    manifest = _complete_package(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    post = tmp_path / "linkedin_post.txt"
+    post.write_text(
+        post.read_text(encoding="utf-8")
+        + "- Offer mix: 150 of 300 qualified broadcasts included an offer.\n",
+        encoding="utf-8",
+    )
+    contract = next(
+        item for item in payload["artifacts"] if item["kind"] == "linkedin_post"
+    )
+    contract["allowed_numbers"] = [150, 300]
+    contract["claim_bindings"].append("finding_offer_mix")
+    payload["frozen_claims"].append(
+        {
+            "name": "finding_offer_mix",
+            "pattern": (
+                r"(?m)^- Offer mix: (?P<numerator>[\d,]+) of "
+                r"(?P<denominator>[\d,]+) qualified broadcasts included an offer\.$"
+            ),
+            "artifacts": ["linkedin_post"],
+            "bindings": {
+                "numerator": {
+                    "expected": 150,
+                    "freeze_field": "metrics.quadrants.Evergreen content.count",
+                    "format": "number",
+                },
+                "denominator": {
+                    "expected": 300,
+                    "freeze_field": "metrics.qualified_broadcasts",
+                    "format": "number",
+                },
+            },
+        }
+    )
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = validate_package.validate_manifest(manifest)
+    rules = {row["rule_id"] for row in report["issues"]}
+
+    assert "semantic_claim_binding_mismatch" in rules
+    assert "stale_frozen_claim" not in rules
+    assert "frozen_claim_expected_mismatch" not in rules
 
 
 def test_package_validator_requires_immutable_clean_git_freeze(tmp_path: Path) -> None:

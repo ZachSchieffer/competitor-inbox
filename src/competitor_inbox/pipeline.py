@@ -61,6 +61,34 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _coverage_window(
+    previous_metadata: dict[str, object],
+    *,
+    fetch_start: datetime,
+    fetch_end: datetime,
+    incremental: bool,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Keep the full observed source window separate from the latest fetch.
+
+    Every ingest merges with the retained master, including a manual shorter
+    backfill. Replacing the original window with the newest request would make
+    retained history look younger than it is. The full window therefore keeps
+    the union of successful requests while ``last_fetch_window`` records the
+    exact newest request.
+    """
+
+    last_fetch = {"start": _iso(fetch_start), "end": _iso(fetch_end)}
+    previous_window = previous_metadata.get("source_window")
+    previous_start = ""
+    previous_end = ""
+    if isinstance(previous_window, dict):
+        previous_start = str(previous_window.get("start") or "")
+        previous_end = str(previous_window.get("end") or "")
+    full_start = min(value for value in (previous_start, last_fetch["start"]) if value)
+    full_end = max(value for value in (previous_end, last_fetch["end"]) if value)
+    return {"start": full_start, "end": full_end}, last_fetch
+
+
 def calendar_months_ago(now: datetime, months: int, timezone_name: str) -> datetime:
     """Return the same local wall date ``months`` earlier, clamped by month."""
 
@@ -171,6 +199,8 @@ def ingest(
     now = now or _utc_now()
     store = MasterStore(config.data_root)
     with StoreLock(store.root):
+        previous_document = store.load_document()
+        previous_metadata = dict(previous_document.get("metadata") or {})
         previous = store.load()
         prior_failures = _load_failures(store)
         prior_state = store.read_state("ingestion")
@@ -242,8 +272,16 @@ def ingest(
         assert_coverage_cross_foot(table, require_quadrants=False)
         gate = evaluate_early_data_gate(table)
 
+        source_window, last_fetch_window = _coverage_window(
+            previous_metadata,
+            fetch_start=since,
+            fetch_end=now,
+            incremental=incremental,
+        )
         metadata = {
-            "source_window": {"start": _iso(since), "end": _iso(now)},
+            **previous_metadata,
+            "source_window": source_window,
+            "last_fetch_window": last_fetch_window,
             "timezone": config.analysis.timezone,
             "source_mode": config.source.mode,
             "ingestion_error_codes": ingestion_error_codes,
@@ -256,8 +294,13 @@ def ingest(
             "status": "success",
             "last_attempt": _iso(now),
             "last_success": _iso(now),
-            "source_window_start": _iso(since),
-            "source_window_end": _iso(now),
+            # These fields describe the complete retained corpus. The latest
+            # overlap request is recorded separately so coverage gates never
+            # mistake a 14-day incremental fetch for the full history window.
+            "source_window_start": source_window["start"],
+            "source_window_end": source_window["end"],
+            "last_fetch_window_start": last_fetch_window["start"],
+            "last_fetch_window_end": last_fetch_window["end"],
             "new_envelopes": fetched,
             "new_distinct_messages": len(parsed_new),
             "parse_failures": len(failures),
