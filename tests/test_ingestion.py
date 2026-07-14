@@ -323,14 +323,15 @@ def test_four_level_dedupe_preserves_variants() -> None:
     report = deduplicate_messages(
         [base, same_source, same_message_id, same_content, campaign_anchor, same_campaign, distinct]
     )
-    assert report.input_count == 7
+    # The same stable source ID is an overlap replay, not another delivery.
+    assert report.input_count == 6
     assert report.distinct_count == 3
-    assert report.variants_collapsed == 4
-    assert report.level_counts["level_1_source"] == 1
+    assert report.variants_collapsed == 3
+    assert report.level_counts["level_1_source"] == 0
     assert report.level_counts["level_2_message_id"] == 1
     assert report.level_counts["level_3_content"] == 1
     assert report.level_counts["level_4_campaign"] == 1
-    assert sorted(message.variant_count for message in report.messages) == [1, 2, 4]
+    assert sorted(message.variant_count for message in report.messages) == [1, 2, 3]
 
 
 def test_mailbox_namespaces_source_ids_dedupe_and_raw_files(tmp_path: Path) -> None:

@@ -746,3 +746,26 @@ evidence from local and automated runs can be compared directly.
   tests enforce the feed-scale calculation and required visible fields.
 - Status: implementation and focused rendering tests complete. Final images
   still require a fresh production render and independent visual review.
+
+## 2026-07-14T19:37:22Z: Reviewed-source evidence must advance with every update
+
+- Authority: scheduled-update integrity, complete raw tables, and cross-foot
+  requirements.
+- Decision: when a private store already contains an independently reviewed
+  `defined_source` ledger, each successful ingest synchronizes its nested date
+  window, included counts, source-ingestion ledger, and post-alias dedupe
+  counts. Analysis refreshes the final scope split without adding inputs again.
+- Decision: treat the unique stable IDs inside each variant cluster as the
+  delivery-count source of truth, and reject a repeated overlap delivery whose
+  ID is already retained in that cluster.
+- Reason: the first incremental production refresh advanced the records and
+  top-level window but left the nested reviewed-source evidence frozen at the
+  prior run.
+- Impact: the mapping and exclusion assertions stay unchanged while each
+  future 7:00 AM local update keeps the source ledger tied to the retained
+  corpus. Existing overlap-inflated counts repair on the first load and save.
+  The package version advances to `1.0.2`; the record schema remains `1.0.0`
+  because no record field changed.
+- Status: implementation, integration regression, and full public suite
+  complete. Production must run once under `v1.0.2` and pass the private audit
+  before the final freeze.

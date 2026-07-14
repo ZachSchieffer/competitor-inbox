@@ -232,10 +232,10 @@ secrets, home paths, production addresses, assets, caches, LFS pointers, and
 submodules. Before a release, fetch every remote ref and separately inventory
 GitHub Releases and Actions artifacts with the GitHub CLI.
 
-After `v1.0.1` exists, run the immutable-ref install test:
+After `v1.0.2` exists, run the immutable-ref install test:
 
 ```bash
-python3 scripts/fresh_install_test.py --ref v1.0.1
+python3 scripts/fresh_install_test.py --ref v1.0.2
 ```
 
 The test clones into an empty directory, creates a new virtual environment,

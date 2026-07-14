@@ -45,6 +45,9 @@ Angle-bracket values below are public schema examples.
 | `variant_count` | integer | Number of collapsed delivery variants |
 | `variant_ids` | array[string] | Stable private IDs in the cluster |
 
+`variant_count` always equals the number of unique `variant_ids`. Loading an
+older store repairs any overlap-inflated count from that durable ID ledger.
+
 Provider identities remain private. Public exports use aggregate counts only.
 
 `complete` means the record came from the error-accounted source window read by

@@ -173,7 +173,11 @@ class NormalizedMessage:
         # Ensure the canonical ID is represented exactly once.
         ids = [self.id, *self.variant_ids]
         self.variant_ids = list(dict.fromkeys(value for value in ids if value))
-        self.variant_count = max(self.variant_count, len(self.variant_ids))
+        # ``variant_ids`` is the durable delivery ledger. Older stores could
+        # overcount a collapsed overlap delivery while retaining its stable ID
+        # only once. Canonicalizing from the IDs repairs those stores on load
+        # and keeps every subsequent merge exact.
+        self.variant_count = len(self.variant_ids)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
