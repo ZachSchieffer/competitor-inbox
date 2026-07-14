@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -412,6 +413,45 @@ def test_posture_requires_share_and_runner_up_margin() -> None:
     assert assign_posture({"Featured products": 34, "Promotion/offer": 33, "Ingredient/education": 33})["label"] == "Mixed"
     qualified = assign_posture({"Ingredient/education": 50, "Promotion/offer": 30, "Featured products": 20})
     assert qualified["label"] == "Education led"
+
+
+def test_posture_is_withheld_until_message_and_history_gates_both_pass() -> None:
+    def promotion_records(count: int, step_days: int) -> list[dict[str, object]]:
+        start = datetime(2026, 1, 1, 8, tzinfo=timezone.utc)
+        return [
+            {
+                "id": f"promotion-{count}-{step_days}-{index}",
+                "brand": "Alder Row",
+                "canonical_received_at": (
+                    start + timedelta(days=index * step_days)
+                ).isoformat(),
+                "subject": "Save 20% today",
+                "preheader": "The offer ends tonight.",
+                "visible_text": "Save 20% on eligible products.",
+                "scope": "broadcast",
+                "variant_count": 1,
+            }
+            for index in range(count)
+        ]
+
+    thin_history = aggregate_records(promotion_records(30, 2))["brands"][0]
+    thin_count = aggregate_records(promotion_records(29, 4))["brands"][0]
+    eligible = aggregate_records(promotion_records(30, 4))["brands"][0]
+
+    assert thin_history["qualified_broadcasts"] == 30
+    assert thin_history["observed_days"] < 90
+    assert thin_history["posture"]["label"] == "Insufficient history"
+    assert thin_history["posture"]["eligible"] is False
+
+    assert thin_count["qualified_broadcasts"] < 30
+    assert thin_count["observed_days"] >= 90
+    assert thin_count["posture"]["label"] == "Insufficient history"
+    assert thin_count["posture"]["eligible"] is False
+
+    assert eligible["qualified_broadcasts"] == 30
+    assert eligible["observed_days"] >= 90
+    assert eligible["posture"]["label"] == "Promotion led"
+    assert eligible["posture"]["eligible"] is True
 
 
 def test_cross_foot_fails_loudly() -> None:

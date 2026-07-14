@@ -561,7 +561,7 @@ def test_untrusted_mbox_dates_cannot_satisfy_hook_day_gate(tmp_path: Path) -> No
     assert summary["brands"][0]["observed_days"] == 0
     assert summary["brands"][0]["hook_eligible"] is False
     assert "Receipt window unavailable" in dashboard
-    assert "Keep collecting history until annual planning coverage reaches 330 observed days." in dashboard
+    assert "No brand has 330 observed days yet" in dashboard
     assert "2026-07-14 to 2026-07-14" not in dashboard
 
 
