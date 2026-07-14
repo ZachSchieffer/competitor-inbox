@@ -11,7 +11,7 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from .analysis import analyze_normalized_messages, build_optional_classifier
@@ -187,6 +187,154 @@ def _write_coverage(store: MasterStore, table: CoverageTable, gate: EarlyGateRes
     )
 
 
+def _nonnegative_int(value: object) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+DEDUPE_LEVELS = (
+    "level_1_source",
+    "level_2_message_id",
+    "level_3_content",
+    "level_4_campaign",
+)
+
+
+def _mapping_section(parent: Mapping[str, object], key: str) -> dict[str, object]:
+    value = parent.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"defined_source.{key} must be an object")
+    return dict(value)
+
+
+def _validated_defined_source(
+    metadata: Mapping[str, object],
+) -> dict[str, object] | None:
+    existing = metadata.get("defined_source")
+    if existing is None:
+        return None
+    if not isinstance(existing, Mapping):
+        raise ValueError("defined_source must be an object")
+    defined = dict(existing)
+    _mapping_section(defined, "included")
+    _mapping_section(defined, "source_ingestion")
+    post_alias = _mapping_section(defined, "post_alias_dedupe")
+    _mapping_section(post_alias, "level_counts")
+    source_window = defined.get("source_window")
+    if source_window is not None and not isinstance(source_window, Mapping):
+        raise ValueError("defined_source.source_window must be an object")
+    return defined
+
+
+def _capped_level_counts(
+    values: Mapping[str, object],
+    *,
+    maximum: int,
+) -> dict[str, int]:
+    """Return the four-level schema without claiming more than ``maximum``."""
+
+    remaining = _nonnegative_int(maximum)
+    output = {level: 0 for level in DEDUPE_LEVELS}
+    for level in DEDUPE_LEVELS:
+        count = min(_nonnegative_int(values.get(level)), remaining)
+        output[level] = count
+        remaining -= count
+    return output
+
+
+def _refresh_defined_source(
+    metadata: dict[str, object],
+    records: list[NormalizedMessage],
+    table: CoverageTable,
+    *,
+    source_window: Mapping[str, str] | None = None,
+    previous_collapsed_variants: int | None = None,
+    dedupe: DedupeReport | None = None,
+    ingestion_status: str = "unknown",
+    ingestion_error_codes: Iterable[str] = (),
+) -> None:
+    """Keep an existing reviewed-source ledger tied to the retained corpus.
+
+    ``defined_source`` is created only by the explicit source-universe review
+    workflow. Normal installs do not gain that assertion here. Once present,
+    however, every successful ingest must advance its nested window and counts
+    alongside the top-level metadata. Analysis refreshes the same ledger from
+    final scope classifications without adding another round of inputs.
+    """
+
+    defined = _validated_defined_source(metadata)
+    if defined is None:
+        return
+
+    active_window_value: object = source_window or metadata.get("source_window")
+    if active_window_value is not None and not isinstance(active_window_value, Mapping):
+        raise ValueError("source_window must be an object")
+    active_window = dict(active_window_value or {})
+    if active_window:
+        defined["source_window"] = active_window
+
+    total = table.total
+    included = _mapping_section(defined, "included")
+    included.update(
+        {
+            "distinct_messages": total.distinct_messages,
+            "delivery_variants": total.parsed_input,
+            "broadcast": total.qualified_broadcasts,
+            "lifecycle": total.lifecycle,
+            "uncertain": total.uncertain,
+        }
+    )
+    defined["included"] = included
+    defined["contributing_brand_count"] = len(
+        {record.brand for record in records if record.brand}
+    )
+
+    source_ingestion = _mapping_section(defined, "source_ingestion")
+    source_ingestion.update(
+        {
+            "status": str(ingestion_status or "unknown"),
+            "parse_failures_preserved": total.parse_failures,
+            "ingestion_errors": total.ingestion_errors,
+            "ingestion_error_codes": list(ingestion_error_codes),
+            "source_completeness": total.source_completeness,
+        }
+    )
+    defined["source_ingestion"] = source_ingestion
+
+    post_alias = _mapping_section(defined, "post_alias_dedupe")
+    stored_levels = _mapping_section(post_alias, "level_counts")
+    collapsed_variants = max(0, total.parsed_input - total.distinct_messages)
+    prior_collapsed = (
+        collapsed_variants
+        if previous_collapsed_variants is None
+        else min(collapsed_variants, _nonnegative_int(previous_collapsed_variants))
+    )
+    level_counts = _capped_level_counts(stored_levels, maximum=prior_collapsed)
+    if dedupe is not None:
+        newly_collapsed = max(0, collapsed_variants - prior_collapsed)
+        increments = _capped_level_counts(
+            dedupe.level_counts,
+            maximum=newly_collapsed,
+        )
+        for level in DEDUPE_LEVELS:
+            level_counts[level] += increments[level]
+    post_alias.update(
+        {
+            "input_distinct_messages": total.parsed_input,
+            "output_distinct_messages": total.distinct_messages,
+            "variants_collapsed": collapsed_variants,
+            "delivery_variants_preserved": total.parsed_input,
+            "level_counts": level_counts,
+        }
+    )
+    defined["post_alias_dedupe"] = post_alias
+    metadata["defined_source"] = defined
+
+
 def ingest(
     config: AppConfig,
     *,
@@ -201,6 +349,7 @@ def ingest(
     with StoreLock(store.root):
         previous_document = store.load_document()
         previous_metadata = dict(previous_document.get("metadata") or {})
+        _validated_defined_source(previous_metadata)
         previous = store.load()
         prior_failures = _load_failures(store)
         prior_state = store.read_state("ingestion")
@@ -213,6 +362,11 @@ def ingest(
             since = calendar_months_ago(now, months, config.analysis.timezone)
 
         existing_sources = {record.source_identity_key for record in previous}
+        existing_variant_ids = {
+            variant_id
+            for record in previous
+            for variant_id in record.variant_ids
+        }
         parsed_new: list[NormalizedMessage] = []
         failures_new: list[ParseFailure] = []
         fetched = 0
@@ -234,8 +388,17 @@ def ingest(
                     brand_aliases=config.source.brand_aliases,
                 )
                 if record is not None:
+                    # A collapsed delivery keeps its stable record ID in the
+                    # canonical cluster even though its source identity is no
+                    # longer the canonical record's identity. Treat overlap
+                    # replays of that ID as already retained, while allowing a
+                    # genuinely new delivery ID to become a new variant.
+                    if record.id in existing_variant_ids:
+                        existing_sources.add(source_key)
+                        continue
                     parsed_new.append(record)
                     existing_sources.add(source_key)
+                    existing_variant_ids.update(record.variant_ids)
                 elif failure is not None:
                     failures_new.append(failure)
         except Exception as exc:
@@ -288,6 +451,19 @@ def ingest(
             "dedupe": dedupe.to_dict(),
             "early_gate": gate.to_dict(),
         }
+        _refresh_defined_source(
+            metadata,
+            records,
+            table,
+            source_window=source_window,
+            previous_collapsed_variants=max(
+                0,
+                sum(record.variant_count for record in previous) - len(previous),
+            ),
+            dedupe=dedupe,
+            ingestion_status="success",
+            ingestion_error_codes=ingestion_error_codes,
+        )
         store.save(records, failures=failures, metadata=metadata)
         _write_coverage(store, table, gate)
         state = {
@@ -333,6 +509,9 @@ def analyze_private_store(config: AppConfig) -> PipelineResult:
         if not records:
             raise RuntimeError("no messages are available; run backfill first")
         failures = _load_failures(store)
+        prior_document = store.load_document()
+        metadata = dict(prior_document.get("metadata") or {})
+        _validated_defined_source(metadata)
         classifier = None
         if config.analysis.ai_enabled:
             classifier = build_optional_classifier(
@@ -340,19 +519,24 @@ def analyze_private_store(config: AppConfig) -> PipelineResult:
                 model=config.analysis.model,
             )
         analyzed = analyze_normalized_messages(records, classifier=classifier)
-        prior_document = store.load_document()
-        metadata = dict(prior_document.get("metadata") or {})
         metadata["analysis"] = {
             "mode": "ai+deterministic" if classifier else "deterministic-only",
             "model": config.analysis.model if classifier else None,
             "analyzed_at": _iso(_utc_now()),
         }
-        store.save(analyzed, failures=failures, metadata=metadata)
         ingestion_state = store.read_state("ingestion")
         ingestion_errors = int(ingestion_state.get("ingestion_errors") or 0)
         table = _coverage(analyzed, failures, ingestion_errors=ingestion_errors)
         assert_coverage_cross_foot(table, require_quadrants=True)
         gate = evaluate_early_data_gate(table)
+        _refresh_defined_source(
+            metadata,
+            analyzed,
+            table,
+            ingestion_status=str(ingestion_state.get("status") or "unknown"),
+            ingestion_error_codes=ingestion_state.get("ingestion_error_codes") or (),
+        )
+        store.save(analyzed, failures=failures, metadata=metadata)
         _write_coverage(store, table, gate)
         dedupe = deduplicate_messages(analyzed)
         state = {

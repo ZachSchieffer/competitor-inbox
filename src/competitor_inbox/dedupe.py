@@ -59,23 +59,36 @@ def _within_days(left: NormalizedMessage, right: NormalizedMessage, days: int) -
     return delta <= days * 86_400
 
 
-def _merge(canonical: NormalizedMessage, incoming: NormalizedMessage) -> NormalizedMessage:
+def _variant_ids(record: NormalizedMessage) -> list[str]:
+    return list(dict.fromkeys([record.id, *record.variant_ids]))
+
+
+def _merge(
+    canonical: NormalizedMessage,
+    incoming: NormalizedMessage,
+) -> tuple[NormalizedMessage, int]:
+    canonical_ids = _variant_ids(canonical)
+    incoming_ids = _variant_ids(incoming)
+    newly_retained = len(set(incoming_ids) - set(canonical_ids))
     ids = list(
         dict.fromkeys(
-            [canonical.id, *canonical.variant_ids, incoming.id, *incoming.variant_ids]
+            [*canonical_ids, *incoming_ids]
         )
     )
-    return replace(
-        canonical,
-        source_completeness=(
-            SourceCompleteness.CURATED_EXPORT.value
-            if SourceCompleteness.CURATED_EXPORT.value
-            in {canonical.source_completeness, incoming.source_completeness}
-            else SourceCompleteness.COMPLETE.value
+    return (
+        replace(
+            canonical,
+            source_completeness=(
+                SourceCompleteness.CURATED_EXPORT.value
+                if SourceCompleteness.CURATED_EXPORT.value
+                in {canonical.source_completeness, incoming.source_completeness}
+                else SourceCompleteness.COMPLETE.value
+            ),
+            variant_count=len(ids),
+            variant_ids=ids,
+            parse_errors=list(dict.fromkeys([*canonical.parse_errors, *incoming.parse_errors])),
         ),
-        variant_count=canonical.variant_count + incoming.variant_count,
-        variant_ids=ids,
-        parse_errors=list(dict.fromkeys([*canonical.parse_errors, *incoming.parse_errors])),
+        newly_retained,
     )
 
 
@@ -176,15 +189,24 @@ def deduplicate_messages(
             register(record, match_index, add_brand_candidate=True)
             continue
 
-        canonical[match_index] = _merge(canonical[match_index], record)
-        level_counts[level or "level_4_campaign"] += record.variant_count
+        canonical[match_index], newly_retained = _merge(
+            canonical[match_index],
+            record,
+        )
+        level_counts[level or "level_4_campaign"] += newly_retained
         # Register every incoming identity against the retained canonical record,
         # but keep the chronological level-4 candidate list canonical-only. The
         # previous implementation re-appended an old canonical index at a recent
         # position, then incorrectly broke before examining newer candidates.
         register(record, match_index, add_brand_candidate=False)
 
-    input_count = sum(record.variant_count for record in incoming_records)
+    input_count = len(
+        {
+            variant_id
+            for record in incoming_records
+            for variant_id in _variant_ids(record)
+        }
+    )
     distinct_count = len(canonical)
     return DedupeReport(
         messages=canonical,

@@ -4,6 +4,7 @@ import hashlib
 import json
 import mailbox
 import subprocess
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
@@ -17,7 +18,7 @@ from competitor_inbox.cli import _bind_coverage_integrity, _git_state, build_par
 from competitor_inbox.config import AppConfig, SourceConfig, load_config, save_config
 from competitor_inbox.coverage import build_coverage_table, evaluate_early_data_gate
 from competitor_inbox.dashboard import generate_dashboard
-from competitor_inbox.dedupe import DedupeReport
+from competitor_inbox.dedupe import DedupeReport, deduplicate_messages
 from competitor_inbox.pipeline import (
     PipelineResult,
     SourceIngestionError,
@@ -236,6 +237,310 @@ def test_shorter_nonincremental_backfill_preserves_retained_history_window(
     )
 
 
+def test_incremental_ingest_refreshes_existing_defined_source_ledger(
+    tmp_path: Path,
+) -> None:
+    mbox_path = tmp_path / "research.mbox"
+    _write_mbox(mbox_path, count=1)
+    config = AppConfig(
+        data_root=tmp_path / "private",
+        source=SourceConfig(mode="mbox", mbox_path=str(mbox_path)),
+    )
+
+    ingest(config, months=12, now=NOW)
+    store = MasterStore(config.data_root)
+    document = store.load_document()
+    metadata = dict(document["metadata"])
+    metadata["defined_source"] = {
+        "type": "post_fetch_sender_domain_allowlist",
+        "mapping_sha256": "0" * 64,
+        "contributing_brand_count": 1,
+        "source_window": dict(metadata["source_window"]),
+        "source_ingestion": {
+            "status": "success",
+            "parse_failures_preserved": 0,
+            "ingestion_errors": 0,
+            "ingestion_error_codes": [],
+            "source_completeness": "complete",
+        },
+        "included": {
+            "distinct_messages": 1,
+            "delivery_variants": 1,
+            "broadcast": 1,
+            "lifecycle": 0,
+            "uncertain": 0,
+        },
+        "excluded": {"distinct_messages": 7},
+        "post_alias_dedupe": {
+            "input_distinct_messages": 1,
+            "output_distinct_messages": 1,
+            "variants_collapsed": 0,
+            "delivery_variants_preserved": 1,
+            "level_counts": {
+                "level_1_source": 0,
+                "level_2_message_id": 0,
+                "level_3_content": 0,
+                "level_4_campaign": 0,
+            },
+        },
+    }
+    store.save(store.load(), metadata=metadata)
+
+    # Append one delivery duplicate and one new campaign. The reviewed ledger
+    # must advance once during ingest, then remain stable through analysis.
+    _write_mbox(mbox_path, count=2)
+    later = NOW + timedelta(days=1)
+    phase_one = ingest(config, incremental=True, now=later)
+    assert phase_one.new_distinct_messages == 2
+    assert phase_one.coverage.total.distinct_messages == 2
+    assert phase_one.coverage.total.parsed_input == 3
+
+    ingested_metadata = store.load_document()["metadata"]
+    defined = ingested_metadata["defined_source"]
+    assert defined["source_window"] == ingested_metadata["source_window"]
+    assert defined["mapping_sha256"] == "0" * 64
+    assert defined["excluded"] == {"distinct_messages": 7}
+    assert defined["included"] == {
+        "distinct_messages": 2,
+        "delivery_variants": 3,
+        "broadcast": 2,
+        "lifecycle": 0,
+        "uncertain": 0,
+    }
+    assert defined["post_alias_dedupe"] == {
+        "input_distinct_messages": 3,
+        "output_distinct_messages": 2,
+        "variants_collapsed": 1,
+        "delivery_variants_preserved": 3,
+        "level_counts": {
+            "level_1_source": 0,
+            "level_2_message_id": 1,
+            "level_3_content": 0,
+            "level_4_campaign": 0,
+        },
+    }
+
+    analyze_private_store(config)
+    analyzed_defined = store.load_document()["metadata"]["defined_source"]
+    assert analyzed_defined["included"] == defined["included"]
+    assert analyzed_defined["post_alias_dedupe"] == defined["post_alias_dedupe"]
+    assert analyzed_defined["source_ingestion"] == {
+        "status": "success",
+        "parse_failures_preserved": 0,
+        "ingestion_errors": 0,
+        "ingestion_error_codes": [],
+        "source_completeness": "complete",
+    }
+
+    # Analysis is idempotent and does not add another round of inputs.
+    analyze_private_store(config)
+    assert store.load_document()["metadata"]["defined_source"] == analyzed_defined
+
+    # The unchanged overlap contains a source identity that was collapsed into
+    # variant_ids on the prior run. It must not be counted a second time.
+    unchanged = ingest(config, incremental=True, now=later + timedelta(days=1))
+    unchanged_defined = store.load_document()["metadata"]["defined_source"]
+    assert unchanged.new_distinct_messages == 0
+    assert unchanged.coverage.total.parsed_input == 3
+    assert unchanged_defined["post_alias_dedupe"] == defined["post_alias_dedupe"]
+
+    # A genuinely new delivery of the same message has a new stable ID and is
+    # still retained as a new variant exactly once.
+    _write_mbox(mbox_path, count=1)
+    new_variant = ingest(config, incremental=True, now=later + timedelta(days=2))
+    new_variant_defined = store.load_document()["metadata"]["defined_source"]
+    assert new_variant.new_distinct_messages == 1
+    assert new_variant.coverage.total.parsed_input == 4
+    assert new_variant_defined["post_alias_dedupe"] == {
+        "input_distinct_messages": 4,
+        "output_distinct_messages": 2,
+        "variants_collapsed": 2,
+        "delivery_variants_preserved": 4,
+        "level_counts": {
+            "level_1_source": 0,
+            "level_2_message_id": 2,
+            "level_3_content": 0,
+            "level_4_campaign": 0,
+        },
+    }
+
+    # Missing state must not let analysis fabricate a successful ingestion.
+    (store.root / "state" / "ingestion.json").unlink()
+    analyze_private_store(config)
+    assert (
+        store.load_document()["metadata"]["defined_source"]["source_ingestion"][
+            "status"
+        ]
+        == "unknown"
+    )
+
+
+def test_v102_update_repairs_inflated_variant_count_from_unique_ids(
+    tmp_path: Path,
+) -> None:
+    mbox_path = tmp_path / "research.mbox"
+    _write_mbox(mbox_path, count=1)
+    config = AppConfig(
+        data_root=tmp_path / "private",
+        source=SourceConfig(mode="mbox", mbox_path=str(mbox_path)),
+    )
+    ingest(config, months=12, now=NOW)
+    store = MasterStore(config.data_root)
+
+    stale = store.load_document()
+    stale["records"][0]["variant_count"] = 4
+    stale["records"][0]["variant_ids"] = [
+        stale["records"][0]["id"],
+        stale["records"][0]["id"],
+    ]
+    store.master_path.write_text(
+        json.dumps(stale, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    assert store.load()[0].variant_count == 1
+    analyze_private_store(config)
+    repaired = store.load_document()["records"][0]
+    assert repaired["variant_count"] == 1
+    assert repaired["variant_count"] == len(set(repaired["variant_ids"]))
+
+
+def test_defined_source_totals_heal_from_retained_records(
+    tmp_path: Path,
+) -> None:
+    mbox_path = tmp_path / "research.mbox"
+    _write_mbox(mbox_path, count=2)
+    config = AppConfig(
+        data_root=tmp_path / "private",
+        source=SourceConfig(mode="mbox", mbox_path=str(mbox_path)),
+    )
+    ingest(config, months=12, now=NOW)
+    records = MasterStore(config.data_root).load()
+    records[0] = replace(
+        records[0],
+        variant_count=9,
+        variant_ids=[records[0].id, "historic-variant"],
+    )
+    table = build_coverage_table(records)
+    metadata: dict[str, object] = {
+        "source_window": {"start": "earlier", "end": "later"},
+        "defined_source": {
+            "included": {"distinct_messages": 1, "delivery_variants": 1},
+            "source_ingestion": {},
+            # Missing post_alias_dedupe is an older, incomplete ledger.
+        },
+    }
+
+    pipeline_module._refresh_defined_source(
+        metadata,
+        records,
+        table,
+        ingestion_status="success",
+    )
+
+    defined = metadata["defined_source"]
+    assert defined["included"]["distinct_messages"] == 2
+    assert defined["included"]["delivery_variants"] == 3
+    assert defined["post_alias_dedupe"] == {
+        "input_distinct_messages": 3,
+        "output_distinct_messages": 2,
+        "variants_collapsed": 1,
+        "delivery_variants_preserved": 3,
+        "level_counts": {
+            "level_1_source": 0,
+            "level_2_message_id": 0,
+            "level_3_content": 0,
+            "level_4_campaign": 0,
+        },
+    }
+
+
+def test_defined_source_caps_earlier_duplicate_level_delta(
+    tmp_path: Path,
+) -> None:
+    mbox_path = tmp_path / "research.mbox"
+    _write_mbox(mbox_path, count=1)
+    config = AppConfig(
+        data_root=tmp_path / "private",
+        source=SourceConfig(mode="mbox", mbox_path=str(mbox_path)),
+    )
+    ingest(config, months=12, now=NOW)
+    base = MasterStore(config.data_root).load()[0]
+    previous = replace(
+        base,
+        variant_count=3,
+        variant_ids=[base.id, "historic-a", "historic-b"],
+    )
+    earlier_new = replace(
+        previous,
+        id="earlier-new",
+        source_uid="earlier-new",
+        canonical_received_at=(NOW - timedelta(days=1)).isoformat(),
+        variant_count=1,
+        variant_ids=["earlier-new"],
+    )
+    dedupe = deduplicate_messages([previous, earlier_new])
+    assert dedupe.level_counts["level_2_message_id"] == 3
+    table = build_coverage_table(dedupe.messages)
+    metadata: dict[str, object] = {
+        "defined_source": {
+            "included": {},
+            "source_ingestion": {},
+            "post_alias_dedupe": {
+                "input_distinct_messages": 3,
+                "output_distinct_messages": 1,
+                "variants_collapsed": 2,
+                "delivery_variants_preserved": 3,
+                "level_counts": {"level_2_message_id": 2},
+            },
+        }
+    }
+
+    pipeline_module._refresh_defined_source(
+        metadata,
+        dedupe.messages,
+        table,
+        previous_collapsed_variants=2,
+        dedupe=dedupe,
+        ingestion_status="success",
+    )
+
+    post_alias = metadata["defined_source"]["post_alias_dedupe"]
+    assert post_alias["variants_collapsed"] == 3
+    assert post_alias["level_counts"]["level_2_message_id"] == 3
+    assert sum(post_alias["level_counts"].values()) <= 3
+
+
+def test_malformed_defined_source_fails_before_fetch_and_preserves_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mbox_path = tmp_path / "research.mbox"
+    _write_mbox(mbox_path, count=1)
+    config = AppConfig(
+        data_root=tmp_path / "private",
+        source=SourceConfig(mode="mbox", mbox_path=str(mbox_path)),
+    )
+    ingest(config, months=12, now=NOW)
+    store = MasterStore(config.data_root)
+    document = store.load_document()
+    metadata = dict(document["metadata"])
+    metadata["defined_source"] = {"included": "not-an-object"}
+    store.save(store.load(), metadata=metadata)
+    master_before = store.master_path.read_bytes()
+    state_before = store.read_state("ingestion")
+
+    def should_not_fetch(*args: object, **kwargs: object):
+        pytest.fail("malformed reviewed metadata must fail before source fetch")
+
+    monkeypatch.setattr(pipeline_module, "_source", should_not_fetch)
+    with pytest.raises(ValueError, match="defined_source.included must be an object"):
+        ingest(config, incremental=True, now=NOW + timedelta(days=1))
+
+    assert store.master_path.read_bytes() == master_before
+    assert store.read_state("ingestion") == state_before
+
+
 def test_source_failure_preserves_master_outputs_and_last_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -265,7 +570,31 @@ def test_source_failure_preserves_master_outputs_and_last_success(
         )
         for index in range(300)
     ]
-    store.save(records, metadata={"frozen": True})
+    store.save(
+        records,
+        metadata={
+            "frozen": True,
+            "source_window": {
+                "start": (NOW - timedelta(days=99)).isoformat(),
+                "end": NOW.isoformat(),
+            },
+            "defined_source": {
+                "included": {},
+                "source_ingestion": {
+                    "status": "success",
+                    "ingestion_errors": 0,
+                    "ingestion_error_codes": [],
+                },
+                "post_alias_dedupe": {
+                    "input_distinct_messages": 300,
+                    "output_distinct_messages": 300,
+                    "variants_collapsed": 0,
+                    "delivery_variants_preserved": 300,
+                    "level_counts": {},
+                },
+            },
+        },
+    )
     prior_success = "2026-07-13T16:00:00Z"
     store.write_state(
         "ingestion",
@@ -316,6 +645,18 @@ def test_source_failure_preserves_master_outputs_and_last_success(
     assert failed_state["last_success"] == prior_success
     assert failed_state["ingestion_errors"] == 1
     assert failed_state["discarded_parsed_messages"] == 1
+
+    analyze_private_store(config)
+    source_ingestion = store.load_document()["metadata"]["defined_source"][
+        "source_ingestion"
+    ]
+    assert source_ingestion == {
+        "status": "failed",
+        "parse_failures_preserved": 0,
+        "ingestion_errors": 1,
+        "ingestion_error_codes": ["OSError"],
+        "source_completeness": "partial",
+    }
 
 
 def test_imap_safe_error_code_is_written_without_server_details(

@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 DEFAULT_SOURCE = "https://github.com/ZachSchieffer/competitor-inbox.git"
-DEFAULT_REF = "v1.0.1"
+DEFAULT_REF = "v1.0.2"
 LOCAL_USER_PATH_RE = re.compile(
     rb"(?:/Users/[A-Za-z0-9._-]+/|/home/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\[^\\\s]+\\)"
 )

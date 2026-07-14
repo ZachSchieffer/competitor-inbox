@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "competitor-inbox"
-version = "1.0.1"
+version = "1.0.2"
 description = "Build a private strategy dashboard from competitor marketing emails you already receive."
 readme = "START-HERE.md"
 requires-python = ">=3.11"
