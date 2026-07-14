@@ -20,6 +20,64 @@ from ..schema import SourceEnvelope
 KEYCHAIN_SERVICE = "competitor-inbox-imap"
 INTERNALDATE_RE = re.compile(rb'INTERNALDATE "([^"]+)"', re.I)
 UIDVALIDITY_RE = re.compile(rb"UIDVALIDITY\s+(\d+)", re.I)
+ASCII_WHITESPACE_RE = re.compile(r"[ \t\r\n\f\v]+")
+GOOGLE_APP_PASSWORD_RE = re.compile(r"[A-Za-z0-9]{16}\Z")
+GMAIL_IMAP_HOST = "imap.gmail.com"
+
+
+class ImapSourceError(RuntimeError):
+    """An IMAP failure represented by a fixed, non-sensitive stage code."""
+
+    SAFE_CODES = frozenset(
+        {
+            "imap_auth_rejected",
+            "imap_connection_lost",
+            "imap_credential_missing",
+            "imap_fetch_failed",
+            "imap_mailbox_unavailable",
+            "imap_search_failed",
+            "imap_tls_failed",
+            "imap_uidvalidity_unavailable",
+        }
+    )
+
+    def __init__(self, safe_code: str) -> None:
+        if safe_code not in self.SAFE_CODES:
+            raise ValueError("invalid IMAP safe error code")
+        self.safe_code = safe_code
+        super().__init__(safe_code)
+
+
+def normalize_imap_app_password(secret: str, *, host: str) -> str:
+    """Remove Google UI separator whitespace from a valid app-password shape.
+
+    The transformation is intentionally limited to Gmail's IMAP host and a
+    16-character ASCII alphanumeric compact value. Other providers and values
+    with an unexpected shape are returned byte-for-byte unchanged.
+    """
+
+    if host.casefold().rstrip(".") != GMAIL_IMAP_HOST:
+        return secret
+    compact = ASCII_WHITESPACE_RE.sub("", secret)
+    if compact != secret and GOOGLE_APP_PASSWORD_RE.fullmatch(compact):
+        return compact
+    return secret
+
+
+def _close_partial_connection(connection: imaplib.IMAP4_SSL) -> None:
+    """Close a connection that may not have reached authenticated state."""
+
+    shutdown = getattr(connection, "shutdown", None)
+    if callable(shutdown):
+        try:
+            shutdown()
+            return
+        except (imaplib.IMAP4.error, OSError):
+            pass
+    try:
+        connection.logout()
+    except (imaplib.IMAP4.error, OSError):
+        pass
 
 
 @dataclass(slots=True)
@@ -148,19 +206,39 @@ class ImapSource:
 
     def _connect(self, password: str) -> None:
         context = ssl.create_default_context()
-        connection = self.connection_factory(
-            self.config.host,
-            self.config.port,
-            ssl_context=context,
-            timeout=self.config.timeout_seconds,
-        )
-        connection.login(self.config.username, password)
-        status, _ = connection.select(self.config.mailbox, readonly=True)  # readonly sends EXAMINE
+        try:
+            connection = self.connection_factory(
+                self.config.host,
+                self.config.port,
+                ssl_context=context,
+                timeout=self.config.timeout_seconds,
+            )
+        except (imaplib.IMAP4.error, OSError, ssl.SSLError):
+            raise ImapSourceError("imap_tls_failed") from None
+        try:
+            connection.login(self.config.username, password)
+        except imaplib.IMAP4.error:
+            _close_partial_connection(connection)
+            raise ImapSourceError("imap_auth_rejected") from None
+        except (OSError, ssl.SSLError):
+            _close_partial_connection(connection)
+            raise ImapSourceError("imap_connection_lost") from None
+        try:
+            # readonly=True sends EXAMINE rather than SELECT.
+            status, _ = connection.select(self.config.mailbox, readonly=True)
+        except (imaplib.IMAP4.error, OSError):
+            _close_partial_connection(connection)
+            raise ImapSourceError("imap_mailbox_unavailable") from None
         if status != "OK":
-            connection.logout()
-            raise RuntimeError("IMAP EXAMINE failed")
+            _close_partial_connection(connection)
+            raise ImapSourceError("imap_mailbox_unavailable")
+        try:
+            uidvalidity = self._read_uidvalidity(connection)
+        except (imaplib.IMAP4.error, OSError, RuntimeError):
+            _close_partial_connection(connection)
+            raise ImapSourceError("imap_uidvalidity_unavailable") from None
         self._connection = connection
-        self.uidvalidity = self._read_uidvalidity(connection)
+        self.uidvalidity = uidvalidity
 
     def _read_uidvalidity(self, connection: imaplib.IMAP4_SSL) -> str:
         response = connection.response("UIDVALIDITY")
@@ -183,7 +261,7 @@ class ImapSource:
         try:
             self._connection.logout()
         except (imaplib.IMAP4.error, OSError):
-            pass
+            _close_partial_connection(self._connection)
         self._connection = None
 
     def _reconnect(self, password: str) -> None:
@@ -199,21 +277,28 @@ class ImapSource:
         if since.tzinfo is None:
             since = since.replace(tzinfo=timezone.utc)
         since = since.astimezone(timezone.utc)
-        password = self.credentials.require(
-            self.config.username,
-            prompt_if_missing=prompt_for_credential,
-        )
+        try:
+            password = self.credentials.require(
+                self.config.username,
+                prompt_if_missing=prompt_for_credential,
+            )
+        except RuntimeError:
+            raise ImapSourceError("imap_credential_missing") from None
+        password = normalize_imap_app_password(password, host=self.config.host)
         self._connect(password)
         assert self._connection is not None
         try:
-            status, data = self._connection.uid(
-                "search",
-                None,
-                "SINCE",
-                since.strftime("%d-%b-%Y"),
-            )
+            try:
+                status, data = self._connection.uid(
+                    "search",
+                    None,
+                    "SINCE",
+                    since.strftime("%d-%b-%Y"),
+                )
+            except (imaplib.IMAP4.error, OSError):
+                raise ImapSourceError("imap_search_failed") from None
             if status != "OK":
-                raise RuntimeError("IMAP UID SEARCH failed")
+                raise ImapSourceError("imap_search_failed")
             uids = data[0].split() if data and data[0] else []
             initial_uidvalidity = self.uidvalidity
             for uid_bytes in uids:
@@ -230,15 +315,18 @@ class ImapSource:
                             raise imaplib.IMAP4.abort("UID FETCH failed")
                         metadata, raw = _extract_raw(fetch_data)
                         break
-                    except (imaplib.IMAP4.abort, imaplib.IMAP4.error, OSError):
+                    except (imaplib.IMAP4.abort, imaplib.IMAP4.error, OSError, RuntimeError):
                         if attempt >= self.config.max_retries:
-                            raise
+                            raise ImapSourceError("imap_fetch_failed") from None
                         self._reconnect(password)
                         if self.uidvalidity != initial_uidvalidity:
-                            raise RuntimeError("UIDVALIDITY changed during ingestion; full rescan required")
+                            raise ImapSourceError("imap_uidvalidity_unavailable")
                 if b"\\Spam" in metadata or b"\\Trash" in metadata:
                     continue
-                received_at = _internal_date(metadata)
+                try:
+                    received_at = _internal_date(metadata)
+                except (UnicodeError, ValueError, RuntimeError):
+                    raise ImapSourceError("imap_fetch_failed") from None
                 if received_at < since:
                     continue
                 if not _allowed(_sender_domain(raw), self.config.sender_domains):

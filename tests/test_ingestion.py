@@ -27,7 +27,13 @@ from competitor_inbox.parser import parse_envelope
 from competitor_inbox.pipeline import dashboard_records
 from competitor_inbox.sanitize import contains_direct_identifier, sanitize_text
 from competitor_inbox.schema import MessageScope, NormalizedMessage, SourceEnvelope, isoformat_utc
-from competitor_inbox.sources.imap import ImapConfig, ImapSource, overlap_since
+from competitor_inbox.sources.imap import (
+    ImapConfig,
+    ImapSource,
+    ImapSourceError,
+    normalize_imap_app_password,
+    overlap_since,
+)
 from competitor_inbox.sources.mbox import MboxSource
 from competitor_inbox.store import (
     MasterStore,
@@ -513,6 +519,16 @@ class FakeCredentialStore:
         return "test-only-secret"
 
 
+class StaticCredentialStore:
+    def __init__(self, secret: str) -> None:
+        self.secret = secret
+
+    def require(self, account: str, *, prompt_if_missing: bool = False) -> str:
+        assert account
+        assert not prompt_if_missing
+        return self.secret
+
+
 class FakeImapConnection:
     def __init__(self, *args: object, **kwargs: object) -> None:
         self.calls: list[tuple[object, ...]] = []
@@ -551,6 +567,37 @@ class AbortingImapConnection(FakeImapConnection):
         return super().uid(command, *args)
 
 
+class RejectingLoginConnection(FakeImapConnection):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.shutdown_called = False
+
+    def login(self, username: str, password: str) -> tuple[str, list[bytes]]:
+        raise imaplib.IMAP4.error("synthetic rejection")
+
+    def shutdown(self) -> None:
+        self.shutdown_called = True
+
+
+class RejectingMailboxConnection(FakeImapConnection):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.shutdown_called = False
+
+    def select(self, mailbox_name: str, readonly: bool = False) -> tuple[str, list[bytes]]:
+        return "NO", []
+
+    def shutdown(self) -> None:
+        self.shutdown_called = True
+
+
+class RejectingSearchConnection(FakeImapConnection):
+    def uid(self, command: str, *args: object) -> tuple[str, list[object]]:
+        if command == "search":
+            return "NO", []
+        return super().uid(command, *args)
+
+
 def test_imap_adapter_is_read_only_uid_based_and_tracks_uidvalidity() -> None:
     connection = FakeImapConnection()
     source = ImapSource(
@@ -570,6 +617,67 @@ def test_imap_adapter_is_read_only_uid_based_and_tracks_uidvalidity() -> None:
     assert "BODY.PEEK[]" in str(fetch_call)
     assert source.uidvalidity == "77"
     assert overlap_since(NOW) == NOW - timedelta(days=14)
+
+
+def test_google_app_password_separator_spaces_are_removed_before_login() -> None:
+    connection = FakeImapConnection()
+    source = ImapSource(
+        ImapConfig(username="archive@inbox.example", host="imap.gmail.com"),
+        credential_store=StaticCredentialStore("abcd efgh ijkl mnop"),  # type: ignore[arg-type]
+        connection_factory=lambda *args, **kwargs: connection,  # type: ignore[arg-type]
+    )
+
+    assert len(list(source.iter_messages(since=NOW - timedelta(days=1)))) == 1
+    assert ("login", "archive@inbox.example", "abcdefghijklmnop") in connection.calls
+
+
+def test_app_password_normalization_is_host_and_shape_limited() -> None:
+    grouped = "abcd efgh ijkl mnop"
+
+    assert normalize_imap_app_password(grouped, host="IMAP.GMAIL.COM.") == "abcdefghijklmnop"
+    assert normalize_imap_app_password(grouped, host="imap.example.test") == grouped
+    assert normalize_imap_app_password("not a 16 char code", host="imap.gmail.com") == (
+        "not a 16 char code"
+    )
+
+
+def test_imap_auth_rejection_uses_safe_code_and_closes_partial_connection() -> None:
+    connection = RejectingLoginConnection()
+    source = ImapSource(
+        ImapConfig(username="archive@inbox.example"),
+        credential_store=FakeCredentialStore(),  # type: ignore[arg-type]
+        connection_factory=lambda *args, **kwargs: connection,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ImapSourceError) as raised:
+        list(source.iter_messages(since=NOW - timedelta(days=1)))
+
+    assert raised.value.safe_code == "imap_auth_rejected"
+    assert str(raised.value) == "imap_auth_rejected"
+    assert connection.shutdown_called is True
+
+
+def test_imap_mailbox_and_search_failures_have_fixed_safe_codes() -> None:
+    mailbox_connection = RejectingMailboxConnection()
+    mailbox_source = ImapSource(
+        ImapConfig(username="archive@inbox.example"),
+        credential_store=FakeCredentialStore(),  # type: ignore[arg-type]
+        connection_factory=lambda *args, **kwargs: mailbox_connection,  # type: ignore[arg-type]
+    )
+    with pytest.raises(ImapSourceError) as mailbox_error:
+        list(mailbox_source.iter_messages(since=NOW - timedelta(days=1)))
+    assert mailbox_error.value.safe_code == "imap_mailbox_unavailable"
+    assert mailbox_connection.shutdown_called is True
+
+    search_connection = RejectingSearchConnection()
+    search_source = ImapSource(
+        ImapConfig(username="archive@inbox.example"),
+        credential_store=FakeCredentialStore(),  # type: ignore[arg-type]
+        connection_factory=lambda *args, **kwargs: search_connection,  # type: ignore[arg-type]
+    )
+    with pytest.raises(ImapSourceError) as search_error:
+        list(search_source.iter_messages(since=NOW - timedelta(days=1)))
+    assert search_error.value.safe_code == "imap_search_failed"
 
 
 def test_imap_adapter_reconnects_after_expired_session() -> None:

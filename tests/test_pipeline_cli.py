@@ -25,6 +25,7 @@ from competitor_inbox.pipeline import (
 )
 from competitor_inbox.schedule import install as install_schedule
 from competitor_inbox.schema import NormalizedMessage, SourceEnvelope
+from competitor_inbox.sources.imap import ImapSourceError
 from competitor_inbox.store import MasterStore
 
 
@@ -191,6 +192,25 @@ def test_source_failure_preserves_master_outputs_and_last_success(
     assert failed_state["last_success"] == prior_success
     assert failed_state["ingestion_errors"] == 1
     assert failed_state["discarded_parsed_messages"] == 1
+
+
+def test_imap_safe_error_code_is_written_without_server_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "private"
+    config = AppConfig(data_root=root, retain_raw=False)
+
+    def rejected_source(*args: object, **kwargs: object):
+        raise ImapSourceError("imap_auth_rejected")
+
+    monkeypatch.setattr(pipeline_module, "_source", rejected_source)
+    with pytest.raises(SourceIngestionError, match=r"\(imap_auth_rejected\)"):
+        ingest(config, now=NOW)
+
+    failed_state = MasterStore(root).read_state("ingestion")
+    assert failed_state["status"] == "failed"
+    assert failed_state["ingestion_error_codes"] == ["imap_auth_rejected"]
 
 
 def test_demo_cli_and_schedule_dry_run_need_no_credentials(tmp_path: Path) -> None:

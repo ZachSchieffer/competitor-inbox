@@ -28,7 +28,7 @@ from .coverage import (
 from .dedupe import DedupeReport, deduplicate_messages
 from .parser import try_parse_envelope
 from .schema import NormalizedMessage, ParseFailure, SourceEnvelope
-from .sources.imap import ImapConfig, ImapSource, overlap_since
+from .sources.imap import ImapConfig, ImapSource, ImapSourceError, overlap_since
 from .sources.mbox import MboxSource
 from .store import MasterStore, StoreLock, atomic_write_bytes, atomic_write_json
 
@@ -212,7 +212,9 @@ def ingest(
             # window is incomplete. Discard parsed records from this attempt and
             # leave master.json, parse failures, coverage, and the dashboard
             # untouched. Only failure status is updated, preserving last_success.
-            error_code = type(exc).__name__
+            error_code = (
+                exc.safe_code if isinstance(exc, ImapSourceError) else type(exc).__name__
+            )
             failure_state = {
                 "status": "failed",
                 "last_attempt": _iso(now),

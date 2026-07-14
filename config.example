@@ -4,6 +4,9 @@ timezone = "America/Phoenix"
 
 [inbox]
 provider = "gmail_imap"
+# IMAP requires 2-Step Verification on this exact inbox account plus a
+# 16-character Google app password stored by `competitor_inbox setup` in macOS
+# Keychain. Never put the app password in this file.
 # For mbox imports, set provider = "mbox" and add path = "<MBOX_PATH>".
 # Coverage trusts delivery/Received headers or the mbox separator. Message Date
 # and file-mtime fallbacks remain library-only and cannot satisfy history gates.
