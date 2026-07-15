@@ -830,4 +830,6 @@ evidence from local and automated runs can be compared directly.
   and no new tag is created.
 - Distribution lock: no LinkedIn activity, DM, connection, announcement, or
   person-to-person asset link occurred.
-- Status: integration changes and final clean-commit binding are in progress.
+- Status: complete. The public visual source is pinned separately from the
+  historical release, and downstream launch assets are regenerated only from
+  a clean checkout of that exact commit.
