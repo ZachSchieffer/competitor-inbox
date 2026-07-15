@@ -724,6 +724,7 @@ def test_visual_audit_rejects_dominant_black_overlay(tmp_path: Path) -> None:
     dark_audit = audit_hero_png(clean_dark)
     assert dark_audit["passed"] is True
     assert dark_audit["dark_pixel_share"] > 0.90
+    assert dark_audit["light_pixel_share"] >= 0.005
     with pytest.raises(HeroRenderError, match="visual corruption"):
         audit_hero_png(blank_dark)
     with pytest.raises(HeroRenderError, match="visual corruption"):

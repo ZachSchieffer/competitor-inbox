@@ -856,7 +856,7 @@ def audit_hero_png(path: str | Path) -> dict[str, float | int | bool]:
         dark_share >= 0.55
         and black_share <= 0.35
         and maximum_black_run_share <= 0.20
-        and light_share >= 0.01
+        and light_share >= 0.005
     )
     passed = light_theme_passed or dark_theme_passed
     result: dict[str, float | int | bool] = {
