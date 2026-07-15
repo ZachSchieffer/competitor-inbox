@@ -790,3 +790,44 @@ evidence from local and automated runs can be compared directly.
 - Distribution lock: no LinkedIn activity, DM, connection, announcement, or
   person-to-person asset link occurred.
 - Status: complete.
+
+## 2026-07-15T04:27:24Z: The current landing-page system controls visual tokens
+
+- Authority: the Phase 1 visual order states that the current landing-page
+  repository and live site win when their tokens conflict with the explicit
+  fallback list.
+- Decision: use the current ZHS dark system: Inter Tight, a black canvas,
+  near-black surfaces, white text, restrained neutral borders, and blue
+  `#3D6CFF` only as an accent. Outer product surfaces use 18-pixel radii and
+  nested controls use 12-pixel radii.
+- Evidence: current landing-page `main` and the live homepage agree on Inter
+  Tight and the dark palette. The bundled local Inter Tight WOFF2 is byte-for-
+  byte identical to the current landing-page build asset and remains covered
+  by the SIL Open Font License 1.1.
+- Impact: the superseded light/Montserrat draft is discarded before any real
+  dashboard or launch visual is regenerated. Generated HTML embeds the font as
+  a data URL, permits only `font-src data:`, and still makes zero external
+  requests.
+- Distribution lock: no LinkedIn activity, DM, connection, announcement, or
+  person-to-person asset link occurred.
+- Status: implementation and frozen visual regeneration complete. Desktop and
+  390-pixel mobile QA pass, the browser made zero non-file/data requests, and
+  the locked census is unchanged.
+
+## 2026-07-15T04:44:19Z: Freeze the polished main commit without a new release
+
+- Authority: Phase 1 requires the public README and polished dashboard on
+  `main`; standing constraints prohibit a new public tag or release.
+- Decision: bind the launch visuals and install instructions to the exact
+  polished `main` commit. Keep `v1.0.3` and its commit separately labeled as
+  the latest historical public release.
+- Reason: pairing the new dashboard hash with the old release SHA would falsely
+  identify which code rendered the launch assets. Installing `v1.0.3` would
+  also give recipients the superseded dashboard styling.
+- Impact: the private copy generator and package assembler use a distinct
+  `visual_source_sha`. Start Here checks out that commit in detached mode. The
+  freeze binds to the visual source, while release metadata remains accurate
+  and no new tag is created.
+- Distribution lock: no LinkedIn activity, DM, connection, announcement, or
+  person-to-person asset link occurred.
+- Status: integration changes and final clean-commit binding are in progress.

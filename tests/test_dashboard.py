@@ -45,6 +45,32 @@ def _hero_png(*, black_rows: int = 0, width: int = 1080, height: int = 1350) -> 
     )
 
 
+def _dark_hero_png(
+    *, width: int = 1080, height: int = 1350, with_ink: bool = True
+) -> bytes:
+    black = b"\x00\x00\x00" * width
+    surface = b"\x0c\x0d\x12" * width
+    ink = b"\xfa\xfb\xfc" * width
+    pixels = b"".join(
+        b"\x00"
+        + (
+            black
+            if row < 38 or row >= height - 38
+            else ink
+            if with_ink and (120 <= row < 150 or 300 <= row < 330)
+            else surface
+        )
+        for row in range(height)
+    )
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", header)
+        + _png_chunk(b"IDAT", zlib.compress(pixels, level=9))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
 def test_dashboard_is_static_local_and_has_restrictive_csp(tmp_path: Path) -> None:
     output = generate_dashboard(demo_summary(), tmp_path / "dashboard.html")
     document = output.read_text(encoding="utf-8")
@@ -58,6 +84,7 @@ def test_dashboard_is_static_local_and_has_restrictive_csp(tmp_path: Path) -> No
     assert "default-src &#x27;none&#x27;" in document
     assert "script-src &#x27;none&#x27;" in document
     assert "connect-src &#x27;none&#x27;" in document
+    assert "font-src data:" in document
     assert "form-action &#x27;none&#x27;" in document
     assert "@media(max-width:900px)" in document
 
@@ -78,8 +105,25 @@ def test_dashboard_premium_visual_system_is_static_and_mobile_ready() -> None:
     document = render_dashboard(summary)
 
     assert {key: value for key, value in summary.items() if key != "_dashboard_weekly_activity"} == before
-    assert "--accent:#2664EC" in document
-    assert 'font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display"' in document
+    assert "@font-face{font-family:'Inter Tight'" in document
+    assert "font-weight:400 800" in document
+    assert "src:url(data:font/woff2;base64," in document
+    assert "--bg:#000000" in document
+    assert "--surface:#0C0D12" in document
+    assert "--surface-2:#101218" in document
+    assert "--ink:#FAFBFC" in document
+    assert "--muted:#878C96" in document
+    assert "--quiet:#5C616B" in document
+    assert "--accent:#3D6CFF" in document
+    assert "--radius:12px" in document
+    assert "--radius-lg:18px" in document
+    assert 'font-family:"Inter Tight",-apple-system' in document
+    assert "width:min(1120px" in document
+    assert "gradient(" not in document
+    assert ".dashboard-page .brand::before" not in document
+    assert "box-shadow:0 4px 12px" not in document
+    assert "#2664EC" not in document
+    assert "Montserrat" not in document
     assert '<body class="dashboard-page prototype">' in document
     assert document.count('class="bar-track"') == 4
     assert document.count('title="Week ') == 52
@@ -92,6 +136,9 @@ def test_dashboard_premium_visual_system_is_static_and_mobile_ready() -> None:
     assert "grid-template-columns:repeat(26" in document
     assert ".dashboard-page tbody tr:nth-child(even)" in document
     assert ".dashboard-page th:first-child,.dashboard-page td:first-child" in document
+    assert ".dashboard-page .posture{border-color:rgba(255,255,255,.10);background:#0C0D12;color:#FAFBFC" in document
+    assert ".dashboard-page .posture.posture-muted{color:#5C616B}" in document
+    assert ".dashboard-page .coverage{max-width:360px;border-color:rgba(255,255,255,.10)" in document
     assert "<script" not in document.casefold()
     assert "http://" not in document.casefold()
     assert "https://" not in document.casefold()
@@ -226,6 +273,16 @@ def test_real_hero_candidates_use_multi_brand_product_ui(tmp_path: Path) -> None
         assert "Evergreen and promotional engine" in document
         assert "Competitor comparison" in document
         assert summary["brands"][0]["brand"] in document
+        assert "@font-face{font-family:'Inter Tight'" in document
+        assert "src:url(data:font/woff2;base64," in document
+        assert 'font-family:"Inter Tight",-apple-system' in document
+        assert "background:#000000" in document
+        assert "#3D6CFF" in document
+        assert "gradient(" not in document
+        assert ".launch-hero-brand::before" not in document
+        assert "box-shadow:0 4px 12px" not in document
+        assert "#2664EC" not in document
+        assert "Montserrat" not in document
         assert "<script" not in document.casefold()
         assert "http://" not in document.casefold()
         assert "https://" not in document.casefold()
@@ -655,11 +712,20 @@ def test_local_renderer_writes_both_verified_pngs(
 
 def test_visual_audit_rejects_dominant_black_overlay(tmp_path: Path) -> None:
     clean = tmp_path / "clean.png"
+    clean_dark = tmp_path / "clean-dark.png"
+    blank_dark = tmp_path / "blank-dark.png"
     corrupted = tmp_path / "corrupted.png"
     clean.write_bytes(_hero_png())
+    clean_dark.write_bytes(_dark_hero_png())
+    blank_dark.write_bytes(_dark_hero_png(with_ink=False))
     corrupted.write_bytes(_hero_png(black_rows=900))
 
     assert audit_hero_png(clean)["passed"] is True
+    dark_audit = audit_hero_png(clean_dark)
+    assert dark_audit["passed"] is True
+    assert dark_audit["dark_pixel_share"] > 0.90
+    with pytest.raises(HeroRenderError, match="visual corruption"):
+        audit_hero_png(blank_dark)
     with pytest.raises(HeroRenderError, match="visual corruption"):
         audit_hero_png(corrupted)
 

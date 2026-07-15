@@ -22,6 +22,9 @@ competitor-inbox = "competitor_inbox.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+competitor_inbox = ["assets/*.woff2", "assets/OFL.txt"]
+
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
