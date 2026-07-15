@@ -80,10 +80,13 @@ def test_dashboard_is_static_local_and_has_restrictive_csp(tmp_path: Path) -> No
     assert "http://" not in document.casefold()
     assert "https://" not in document.casefold()
     assert "<link" not in document.casefold()
-    assert "<img" not in document.casefold()
+    image_sources = re.findall(r'<img[^>]+src="([^"]+)"', document)
+    assert len(image_sources) == 30
+    assert all(source.startswith("data:image/png;base64,") for source in image_sources)
     assert "default-src &#x27;none&#x27;" in document
     assert "script-src &#x27;none&#x27;" in document
     assert "connect-src &#x27;none&#x27;" in document
+    assert "img-src data:" in document
     assert "font-src data:" in document
     assert "form-action &#x27;none&#x27;" in document
     assert "@media(max-width:900px)" in document

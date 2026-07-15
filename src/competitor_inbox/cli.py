@@ -28,6 +28,7 @@ from .config import (
     save_config,
 )
 from .coverage import coverage_markdown
+from .creative_gallery import load_private_creative_gallery
 from .dashboard import (
     _freeze_metrics,
     derive_dashboard_weekly_activity,
@@ -270,6 +271,9 @@ def _render_real(
     dashboard_summary = dict(summary)
     dashboard_summary["_dashboard_weekly_activity"] = derive_dashboard_weekly_activity(
         records, summary
+    )
+    dashboard_summary["_creative_gallery"] = load_private_creative_gallery(
+        store.root, summary
     )
     dashboard = generate_dashboard(
         dashboard_summary, store.root / "outputs" / "dashboard.html"

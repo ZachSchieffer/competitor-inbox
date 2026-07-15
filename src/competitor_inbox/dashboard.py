@@ -21,6 +21,13 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .aggregate import aggregate_records
+from .creative_gallery import (
+    GALLERY_TARGET_MAX,
+    GALLERY_TARGET_MIN,
+    normalize_creative_metadata,
+    synthetic_creative_gallery,
+    unavailable_creative_gallery,
+)
 from .sanitize import assert_recipient_safe, sanitize_text
 from .schedule import (
     INCREMENTAL_OVERLAP_DAYS,
@@ -253,6 +260,26 @@ _DASHBOARD_POLISH_CSS = r"""
 .dashboard-page .message{padding:15px 18px;border-bottom:1px solid rgba(255,255,255,.10)}
 .dashboard-page .message b{color:#FAFBFC;font-size:12px;font-weight:600;line-height:1.45;white-space:normal}
 .dashboard-page .message small{color:#5C616B;font-size:10px;line-height:1.4}
+.dashboard-page .creative-overview{display:grid;grid-template-columns:1.3fr repeat(3,minmax(0,.7fr));gap:12px;margin-bottom:20px}
+.dashboard-page .creative-overview-item{min-height:96px;padding:17px 18px;border:1px solid rgba(255,255,255,.10);border-radius:12px;background:#101218}
+.dashboard-page .creative-overview-item b{display:block;color:#FAFBFC;font-size:25px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+.dashboard-page .creative-overview-item span{display:block;margin-top:10px;color:#878C96;font-size:11px;line-height:1.4}
+.dashboard-page .creative-brand-list{display:grid;gap:14px;margin-bottom:24px}
+.dashboard-page .creative-brand-card{padding:20px;border:1px solid rgba(255,255,255,.10);border-radius:12px;background:#101218}
+.dashboard-page .creative-brand-card[data-state="insufficient"]{border-color:rgba(61,108,255,.42)}
+.dashboard-page .creative-brand-card[data-state="unavailable"]{background:#0C0D12}
+.dashboard-page .creative-brand-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:16px}
+.dashboard-page .creative-brand-head h3{margin:0;color:#FAFBFC;font-size:18px;font-weight:650;letter-spacing:-.015em}
+.dashboard-page .creative-brand-head p{margin:5px 0 0;color:#878C96;font-size:12px;line-height:1.45}
+.dashboard-page .creative-status{display:inline-flex;flex:0 0 auto;padding:6px 9px;border:1px solid rgba(255,255,255,.10);border-radius:999px;background:#0C0D12;color:#878C96;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.dashboard-page .creative-status.ready{border-color:rgba(61,108,255,.45);color:#FAFBFC}
+.dashboard-page .creative-status.insufficient{border-color:rgba(61,108,255,.45);color:#3D6CFF}
+.dashboard-page .creative-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.dashboard-page .creative-card{min-width:0;overflow:hidden;margin:0;border:1px solid rgba(255,255,255,.10);border-radius:10px;background:#0C0D12}
+.dashboard-page .creative-card img{display:block;width:100%;aspect-ratio:320/420;object-fit:cover;background:#000000}
+.dashboard-page .creative-card figcaption{min-height:54px;padding:9px 10px;color:#878C96;font-size:10px;line-height:1.35}
+.dashboard-page .creative-empty{display:flex;min-height:150px;align-items:center;justify-content:center;padding:24px;border:1px dashed rgba(255,255,255,.14);border-radius:10px;background:#0C0D12;color:#878C96;font-size:12px;text-align:center}
+.dashboard-page .creative-target-note{margin:0 0 20px;color:#878C96;font-size:12px}
 .dashboard-page .actions{gap:16px}
 .dashboard-page .action{padding:24px;border:1px solid rgba(255,255,255,.10);border-left:3px solid #3D6CFF;border-radius:12px;background:#0C0D12}
 .dashboard-page .action .time{color:#3D6CFF;font-size:10px;font-weight:700;letter-spacing:.08em}
@@ -263,8 +290,8 @@ _DASHBOARD_POLISH_CSS = r"""
 .dashboard-page .method p{max-width:64ch;color:#878C96;line-height:1.6}
 .dashboard-page .foot{padding:0 0 48px;color:#5C616B;font-size:11px}
 .dashboard-page .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-@media(max-width:900px){.dashboard-page .shell{width:min(100% - 40px,1120px)}.dashboard-page .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.dashboard-page .metrics .primary{grid-column:span 2}.dashboard-page .grid-two,.dashboard-page .scope-grid,.dashboard-page .actions,.dashboard-page .method{grid-template-columns:1fr}.dashboard-page .section-head{display:block}.dashboard-page .coverage{margin-top:16px}.dashboard-page .occasion-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:520px){.dashboard-page{font-size:14px}.dashboard-page .shell{width:calc(100% - 28px)}.dashboard-page .mast{padding:28px 0 30px}.dashboard-page .brandline{width:100%;align-items:flex-start;gap:10px}.dashboard-page .brand{max-width:100%;font-size:10px;line-height:1.35;white-space:normal;overflow-wrap:anywhere}.dashboard-page .stamp,.dashboard-page .freshness{margin-top:8px}.dashboard-page .mast h1{max-width:100%;margin:44px 0 16px;font-size:clamp(36px,11vw,43px);line-height:1;letter-spacing:-.04em;overflow-wrap:break-word}.dashboard-page .mast p{font-size:15px;line-height:1.5}.dashboard-page .window{display:flex;width:100%;gap:8px;margin-top:24px}.dashboard-page .window>span:not(.freshness){width:100%;padding:0;border:0}.dashboard-page .window .freshness{margin:5px 0 0}.dashboard-page main{padding:24px 0 60px}.dashboard-page section{margin-bottom:18px;padding:22px 18px;border-radius:18px}.dashboard-page .section-head{margin-bottom:22px}.dashboard-page .section-head h2{font-size:24px}.dashboard-page .section-head p{font-size:13px}.dashboard-page .coverage{max-width:none;font-size:10px}.dashboard-page .section-head>div,.dashboard-page .metrics,.dashboard-page .metric,.dashboard-page .coverage,.dashboard-page .table-wrap{min-width:0}.dashboard-page .coverage,.dashboard-page .table-wrap{width:100%;max-width:100%}.dashboard-page .metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.dashboard-page .metrics .primary{grid-column:span 2}.dashboard-page .metric{min-height:126px;padding:17px}.dashboard-page .metric.primary{min-height:142px}.dashboard-page .metric .value{font-size:34px}.dashboard-page .metric .label{margin-top:22px;font-size:11px}.dashboard-page .metric .note{font-size:10px}.dashboard-page .subpanel{padding:18px}.dashboard-page .quadrant{grid-template-columns:1fr auto;gap:8px 14px;margin-bottom:18px}.dashboard-page .quadrant .bar-track{grid-column:1/-1;grid-row:2}.dashboard-page .quadrant .number{grid-column:2;grid-row:1;text-align:right}.dashboard-page table{min-width:980px}.dashboard-page th,.dashboard-page td{padding:12px 13px}.dashboard-page .activity-panel{padding:18px}.dashboard-page .activity-head{display:block;margin-bottom:16px}.dashboard-page .heat-legend{margin-top:12px}.dashboard-page .activity-grid{grid-template-columns:repeat(26,minmax(6px,1fr));gap:4px}.dashboard-page .week-cell{height:20px}.dashboard-page .activity-labels{display:none}.dashboard-page .occasion-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.dashboard-page .occasion{min-height:92px;padding:15px}.dashboard-page .action{padding:20px}.dashboard-page .method{gap:10px}}
+@media(max-width:900px){.dashboard-page .shell{width:min(100% - 40px,1120px)}.dashboard-page .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.dashboard-page .metrics .primary{grid-column:span 2}.dashboard-page .grid-two,.dashboard-page .scope-grid,.dashboard-page .actions,.dashboard-page .method{grid-template-columns:1fr}.dashboard-page .section-head{display:block}.dashboard-page .coverage{margin-top:16px}.dashboard-page .occasion-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.dashboard-page .creative-overview{grid-template-columns:repeat(2,minmax(0,1fr))}.dashboard-page .creative-strip{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:520px){.dashboard-page{font-size:14px}.dashboard-page .shell{width:calc(100% - 28px)}.dashboard-page .mast{padding:28px 0 30px}.dashboard-page .brandline{width:100%;align-items:flex-start;gap:10px}.dashboard-page .brand{max-width:100%;font-size:10px;line-height:1.35;white-space:normal;overflow-wrap:anywhere}.dashboard-page .stamp,.dashboard-page .freshness{margin-top:8px}.dashboard-page .mast h1{max-width:100%;margin:44px 0 16px;font-size:clamp(36px,11vw,43px);line-height:1;letter-spacing:-.04em;overflow-wrap:break-word}.dashboard-page .mast p{font-size:15px;line-height:1.5}.dashboard-page .window{display:flex;width:100%;gap:8px;margin-top:24px}.dashboard-page .window>span:not(.freshness){width:100%;padding:0;border:0}.dashboard-page .window .freshness{margin:5px 0 0}.dashboard-page main{padding:24px 0 60px}.dashboard-page section{margin-bottom:18px;padding:22px 18px;border-radius:18px}.dashboard-page .section-head{margin-bottom:22px}.dashboard-page .section-head h2{font-size:24px}.dashboard-page .section-head p{font-size:13px}.dashboard-page .coverage{max-width:none;font-size:10px}.dashboard-page .section-head>div,.dashboard-page .metrics,.dashboard-page .metric,.dashboard-page .coverage,.dashboard-page .table-wrap{min-width:0}.dashboard-page .coverage,.dashboard-page .table-wrap{width:100%;max-width:100%}.dashboard-page .metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.dashboard-page .metrics .primary{grid-column:span 2}.dashboard-page .metric{min-height:126px;padding:17px}.dashboard-page .metric.primary{min-height:142px}.dashboard-page .metric .value{font-size:34px}.dashboard-page .metric .label{margin-top:22px;font-size:11px}.dashboard-page .metric .note{font-size:10px}.dashboard-page .subpanel{padding:18px}.dashboard-page .quadrant{grid-template-columns:1fr auto;gap:8px 14px;margin-bottom:18px}.dashboard-page .quadrant .bar-track{grid-column:1/-1;grid-row:2}.dashboard-page .quadrant .number{grid-column:2;grid-row:1;text-align:right}.dashboard-page table{min-width:980px}.dashboard-page th,.dashboard-page td{padding:12px 13px}.dashboard-page .activity-panel{padding:18px}.dashboard-page .activity-head{display:block;margin-bottom:16px}.dashboard-page .heat-legend{margin-top:12px}.dashboard-page .activity-grid{grid-template-columns:repeat(26,minmax(6px,1fr));gap:4px}.dashboard-page .week-cell{height:20px}.dashboard-page .activity-labels{display:none}.dashboard-page .occasion-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.dashboard-page .occasion{min-height:92px;padding:15px}.dashboard-page .creative-overview{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.dashboard-page .creative-overview-item{min-height:86px;padding:14px}.dashboard-page .creative-brand-card{padding:16px}.dashboard-page .creative-brand-head{display:block}.dashboard-page .creative-status{margin-top:10px}.dashboard-page .creative-strip{display:flex;overflow-x:auto;gap:10px;padding-bottom:4px;scroll-snap-type:x proximity}.dashboard-page .creative-card{flex:0 0 72%;scroll-snap-align:start}.dashboard-page .creative-empty{min-height:110px}.dashboard-page .action{padding:20px}.dashboard-page .method{gap:10px}}
 @media print{.dashboard-page{background:#0C0D12}.dashboard-page .mast{background:#0C0D12}.dashboard-page section{box-shadow:none}}
 """
 
@@ -580,6 +607,135 @@ def _messages(summary: Mapping[str, Any], scope: str) -> str:
     )
 
 
+def _safe_gallery_data_uri(value: Any) -> str | None:
+    candidate = str(value or "")
+    prefixes = (
+        "data:image/png;base64,",
+        "data:image/jpeg;base64,",
+        "data:image/webp;base64,",
+    )
+    prefix = next((item for item in prefixes if candidate.startswith(item)), None)
+    if prefix is None:
+        return None
+    try:
+        base64.b64decode(candidate[len(prefix) :], validate=True)
+    except (ValueError, TypeError):
+        return None
+    return candidate
+
+
+def _creative_gallery(summary: Mapping[str, Any]) -> str:
+    raw_gallery = summary.get("_creative_gallery")
+    if isinstance(raw_gallery, Mapping):
+        gallery = dict(raw_gallery)
+    elif summary.get("metadata", {}).get("illustrative_prototype"):
+        gallery = synthetic_creative_gallery(summary)
+    else:
+        gallery = unavailable_creative_gallery(summary)
+
+    target_min = GALLERY_TARGET_MIN
+    target_max = GALLERY_TARGET_MAX
+    rows = [
+        dict(row)
+        for row in gallery.get("brands", [])
+        if isinstance(row, Mapping)
+    ]
+    total_brands = len(rows)
+    brand_cards: list[str] = []
+    loaded = ready = insufficient = unavailable = 0
+    for row in rows:
+        brand = str(row.get("brand") or "Brand unavailable")
+        items = [
+            dict(item)
+            for item in row.get("items", [])
+            if isinstance(item, Mapping)
+        ][:target_max]
+        cards: list[str] = []
+        for index, item in enumerate(items, start=1):
+            source = _safe_gallery_data_uri(item.get("data_uri"))
+            if source is None:
+                continue
+            item_date, item_category = normalize_creative_metadata(
+                item.get("date"), item.get("category")
+            )
+            metadata = " | ".join(
+                value
+                for value in (
+                    item_date,
+                    item_category,
+                )
+                if value
+            ) or "Safe creative preview"
+            cards.append(
+                '<figure class="creative-card">'
+                f'<img src="{html.escape(source, quote=True)}" '
+                f'alt="{_e(brand)} safe creative preview {index}" width="320" height="420">'
+                f"<figcaption>{_e(metadata)}</figcaption></figure>"
+            )
+        safe_count = len(cards)
+        loaded += safe_count
+        if safe_count >= target_min:
+            status = "ready"
+            ready += 1
+            reason = (
+                f"{safe_count} safe creative previews available. "
+                f"Target: {target_min}-{target_max}."
+            )
+        elif safe_count:
+            status = "insufficient"
+            insufficient += 1
+            reason = (
+                f"{safe_count} of {target_min} minimum safe creative previews "
+                "are available."
+            )
+        else:
+            status = "unavailable"
+            unavailable += 1
+            reason = "No creative preview passed the safe-render gate."
+        if safe_count < target_min:
+            needed = target_min - safe_count
+            placeholder = (
+                f"{needed} more safe preview{'s' if needed != 1 else ''} needed "
+                f"to reach the {target_min} preview minimum."
+                if safe_count
+                else "Creative unavailable. No preview passed the safe-render gate."
+            )
+            cards.append(f'<div class="creative-empty">{_e(placeholder)}</div>')
+        status_label = {
+            "ready": "Ready",
+            "insufficient": "Insufficient",
+            "unavailable": "Unavailable",
+        }[status]
+        brand_cards.append(
+            f'<article class="creative-brand-card" data-state="{status}">'
+            '<div class="creative-brand-head"><div>'
+            f"<h3>{_e(brand)}</h3><p>{_e(reason)}</p></div>"
+            f'<span class="creative-status {status}">{status_label}: {safe_count}</span>'
+            f'</div><div class="creative-strip">{"".join(cards)}</div></article>'
+        )
+    if not brand_cards:
+        brand_cards.append(
+            '<div class="creative-empty">No census brands are available for creative review.</div>'
+        )
+    overview = (
+        '<div class="creative-overview">'
+        '<div class="creative-overview-item">'
+        f"<b>{loaded:,}</b><span>Validated local creative previews</span></div>"
+        '<div class="creative-overview-item">'
+        f"<b>{ready:,} / {total_brands:,}</b><span>Brands at the {target_min}-{target_max} preview target</span></div>"
+        '<div class="creative-overview-item">'
+        f"<b>{insufficient:,}</b><span>Brands with insufficient safe creative</span></div>"
+        '<div class="creative-overview-item">'
+        f"<b>{unavailable:,}</b><span>Brands with creative unavailable</span></div>"
+        "</div>"
+    )
+    return (
+        overview
+        + f'<p class="creative-target-note">Target: {target_min}-{target_max} privacy-reviewed previews per brand. Missing previews stay explicit and do not block the rest of the strategy dashboard.</p>'
+        + f'<div class="creative-brand-list">{"".join(brand_cards)}</div>'
+    )
+
+
 def render_dashboard(summary: Mapping[str, Any], title: str = "The Competitor Inbox") -> str:
     """Render one complete static document with no executable or remote content."""
 
@@ -661,8 +817,9 @@ def render_dashboard(summary: Mapping[str, Any], title: str = "The Competitor In
 <section aria-labelledby="engine">{_section_head('Evergreen and Promotional Engine','Offer status and seasonality are independent, so the 4-part census stays useful for planning.',coverage)}
 <div class="grid-two"><div class="subpanel"><h3>Four-quadrant census</h3>{_quadrant_rows(summary)}</div><div class="subpanel"><h3>What stands out</h3><div class="finding-list">{findings}</div></div></div></section>
 <section aria-labelledby="seasonal">{_section_head('Seasonal Planner',annual_copy,seasonal_coverage)}{_activity_heatmap(summary)}<div class="occasion-grid">{occasions}</div></section>
-<section aria-labelledby="library">{_section_head('Messaging Library','Browse recent sanitized subjects by scope. Only broadcasts feed the strategy metrics.',coverage)}
-<div class="scope-grid"><div class="scope-block"><h3>Broadcast</h3>{_messages(summary,'broadcast')}</div><div class="scope-block"><h3>Lifecycle</h3>{_messages(summary,'lifecycle')}</div><div class="scope-block"><h3>Uncertain</h3>{_messages(summary,'uncertain')}</div></div></section>
+<section aria-labelledby="library">{_section_head('Messaging Library','Review privacy-checked creative previews and recent sanitized subjects. Only broadcasts feed the strategy metrics.',coverage)}
+{_creative_gallery(summary)}
+<div class="scope-grid"><div class="scope-block"><h3>Broadcast subjects</h3>{_messages(summary,'broadcast')}</div><div class="scope-block"><h3>Lifecycle subjects</h3>{_messages(summary,'lifecycle')}</div><div class="scope-block"><h3>Uncertain subjects</h3>{_messages(summary,'uncertain')}</div></div></section>
 <section aria-labelledby="action">{_section_head('Owner Action Plan','Turn the census into the next planning conversation without treating inbox activity as performance.',coverage)}
 <div class="actions"><div class="action"><span class="time">Next 30 days</span><h3>Audit the live calendar</h3><p>Compare the planned calendar with the 4-part census and preserve room for evergreen education.</p></div>
 <div class="action"><span class="time">Next 60 days</span><h3>Separate content from offers</h3><p>Plan evergreen, everyday promotion, seasonal promotion, and seasonal content as distinct jobs.</p></div>

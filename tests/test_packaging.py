@@ -95,6 +95,16 @@ def test_real_render_executes_the_complete_output_pipeline(
         "derive_dashboard_weekly_activity",
         lambda records, value: [],
     )
+    gallery_marker = {
+        "metadata_status": "available",
+        "brands": [{"brand": "Fixture", "status": "ready", "items": []}],
+    }
+    monkeypatch.setattr(
+        cli_module,
+        "load_private_creative_gallery",
+        lambda root, value: gallery_marker,
+    )
+    captured_dashboard_summary: dict[str, object] = {}
 
     def write_heroes(value: object, destination: Path) -> list[Path]:
         destination.mkdir(parents=True, mode=0o700)
@@ -110,6 +120,7 @@ def test_real_render_executes_the_complete_output_pipeline(
         return rendered
 
     def write_dashboard(value: object, destination: Path) -> Path:
+        captured_dashboard_summary.update(value)  # type: ignore[arg-type]
         destination.write_text("dashboard")
         return destination
 
@@ -130,6 +141,8 @@ def test_real_render_executes_the_complete_output_pipeline(
     assert len(rendered["hero_screenshots"]) == 2
     assert Path(rendered["dashboard"]).is_file()
     assert Path(rendered["freeze_manifest"]).is_file()
+    assert captured_dashboard_summary["_creative_gallery"] == gallery_marker
+    assert "_creative_gallery" not in summary
 
 
 def test_real_render_is_browser_free_by_default(
