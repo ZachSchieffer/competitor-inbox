@@ -21,6 +21,17 @@ are intentionally deferred:
 - Automated LinkedIn posting, commenting, connections, or direct messages.
 - GitHub release assets and production ingestion through GitHub Actions.
 
+## v1.1: private creative rendering
+
+- Ship the full-archive renderer as a resumable command with a progress ledger.
+- Add the optional local Messaging Library thumbnail gallery only after every
+  configured brand has 3 to 5 privacy-safe source messages.
+- Keep the launch table view as the default until the renderer passes the full
+  privacy, redaction, offline-runtime, and fresh-install test suite.
+
+The launch sample exposed an honest source-coverage limit: LMNT had no safe
+non-personalized render candidate, and Four Sigmatic had only 1 safe candidate.
+The v1.0.3 launch therefore keeps the sanitized table view.
+
 Each backlog item requires a separate privacy and product review before it can
 enter scope.
-

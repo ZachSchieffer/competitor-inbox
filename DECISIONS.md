@@ -769,3 +769,24 @@ evidence from local and automated runs can be compared directly.
 - Status: implementation, integration regression, and full public suite
   complete. Production must run once under `v1.0.2` and pass the private audit
   before the final freeze.
+
+## 2026-07-15T03:12:02Z: The launch stays dashboard-first
+
+- Authority: final pre-launch order and the locked production census.
+- Decision: use 2 real-dashboard 1080 x 1350 hero candidates and a silent
+  30-second dashboard scroll as the launch visuals. The static messaging table
+  remains the product's launch library view.
+- Reason: the dashboard is the product. A private render sample produced 125
+  privacy-safe emails across 32 of 33 contributing brands, but LMNT had 0 safe
+  candidates and Four Sigmatic had 1. That cannot satisfy the approved 3 to 5
+  safe renders per brand requirement.
+- Impact: the optional gallery and full-archive renderer remain v1.1 work. No
+  rendered creative, production data, or private manifest enters this public
+  repository.
+- Freeze: the census stays locked at SHA-256
+  `65ee5df897c06aada91634a765abfeaa079c061a8e91bbe9cdd193a85fc5a4f7`.
+  The dashboard stays locked at SHA-256
+  `b25fddc75a4e6a610f378f0bf8a271300bd66b8e5472ba41e450be5a3481191c`.
+- Distribution lock: no LinkedIn activity, DM, connection, announcement, or
+  person-to-person asset link occurred.
+- Status: complete.
