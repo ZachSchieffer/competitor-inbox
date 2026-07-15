@@ -291,6 +291,28 @@ def test_missing_manifest_marks_every_census_brand_unavailable(tmp_path: Path) -
     ]
 
 
+def test_partial_manifest_keeps_missing_census_brands_as_table_fallback(
+    tmp_path: Path,
+) -> None:
+    root, summary, manifest_path = _private_gallery_fixture(tmp_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["coverage"].pop("LMNT")
+    manifest["qualified_broadcasts"] -= 6
+    manifest["requested"] -= 6
+    manifest["processed"] -= 6
+    manifest["resolved"] -= 6
+    manifest["skipped"] -= 6
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    gallery = load_private_creative_gallery(root, summary, manifest_path=manifest_path)
+    rows = {row["brand"]: row for row in gallery["brands"]}
+
+    assert gallery["metadata_status"] == "available"
+    assert rows["LMNT"]["status"] == "unavailable"
+    assert rows["LMNT"]["items"] == []
+    assert rows["LMNT"]["reason"] == "No safe creative preview is available for this brand."
+
+
 def test_gallery_renderer_uses_data_images_and_keeps_states_visible(tmp_path: Path) -> None:
     root, gallery_summary, manifest_path = _private_gallery_fixture(tmp_path)
     summary = demo_summary()

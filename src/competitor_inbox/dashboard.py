@@ -338,39 +338,50 @@ html,body{width:1080px;height:1350px;margin:0;padding:0;overflow:hidden;backgrou
 .launch-hero-top{display:flex;align-items:center;justify-content:space-between;gap:24px}
 .launch-hero-brand{color:#FAFBFC;font-size:21px;font-weight:800;letter-spacing:.07em;text-transform:uppercase}
 .launch-coverage{padding:11px 17px;border:1px solid rgba(255,255,255,.10);border-radius:999px;background:#0C0D12;color:#878C96;font-size:20px;font-weight:600}
-.launch-hero-title{max-width:920px;margin:44px 0 12px;color:#FAFBFC;font-size:66px;font-weight:800;letter-spacing:-.045em;line-height:.98;text-wrap:balance}
-.candidate-b .launch-hero-title{max-width:900px;font-size:64px}
-.launch-hero-sub{max-width:910px;margin:0;color:#878C96;font-size:27px;font-weight:400;line-height:1.25;text-wrap:pretty}
-.launch-window{margin-top:14px;color:#878C96;font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
-.launch-stats{display:grid;grid-template-columns:1.05fr 1.2fr .8fr;gap:12px;margin-top:28px}
-.launch-stat{min-height:112px;padding:16px 18px;border:1px solid rgba(255,255,255,.10);border-radius:12px;background:#0C0D12}
+.launch-hero-title{max-width:920px;margin:26px 0 8px;color:#FAFBFC;font-size:52px;font-weight:800;letter-spacing:-.045em;line-height:.98;text-wrap:balance}
+.candidate-b .launch-hero-title{max-width:900px;font-size:50px}
+.launch-hero-sub{max-width:910px;margin:0;color:#878C96;font-size:21px;font-weight:400;line-height:1.25;text-wrap:pretty}
+.launch-window{margin-top:8px;color:#878C96;font-size:16px;font-weight:600;font-variant-numeric:tabular-nums}
+.launch-stats{display:grid;grid-template-columns:1.05fr 1.2fr .8fr;gap:10px;margin-top:16px}
+.launch-stat{min-height:78px;padding:12px 15px;border:1px solid rgba(255,255,255,.10);border-radius:12px;background:#0C0D12}
 .launch-stat.primary{border:1px solid rgba(255,255,255,.10);border-left:4px solid #3D6CFF;background:#0C0D12;color:#FAFBFC;box-shadow:none}
-.launch-stat b{display:block;color:#FAFBFC;font-size:45px;font-weight:800;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
-.launch-stat span,.launch-stat.primary span{display:block;margin-top:11px;color:#878C96;font-size:20px;font-weight:600}
-.launch-product{margin-top:18px;padding:18px;border:1px solid rgba(255,255,255,.10);border-radius:18px;background:#101218}
-.launch-product-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:13px}
-.launch-product-head h2{margin:0;color:#FAFBFC;font-size:25px;font-weight:700;letter-spacing:-.02em}
-.launch-product-head span{color:#878C96;font-size:18px}
+.launch-stat b{display:block;color:#FAFBFC;font-size:38px;font-weight:800;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
+.launch-stat span,.launch-stat.primary span{display:block;margin-top:6px;color:#878C96;font-size:15px;font-weight:600}
+.launch-creatives{margin-top:12px;padding:13px;border:1px solid rgba(255,255,255,.10);border-radius:16px;background:#101218}
+.launch-creatives-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:10px}
+.launch-creatives-head h2{margin:0;color:#FAFBFC;font-size:20px;font-weight:700;letter-spacing:-.015em}
+.launch-creatives-head span{color:#878C96;font-size:13px}
+.launch-creative-grid{display:grid;gap:9px}
+.candidate-a .launch-creative-grid{grid-template-columns:repeat(7,minmax(0,1fr))}
+.candidate-b .launch-creative-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+.launch-creative{overflow:hidden;margin:0;border:1px solid rgba(255,255,255,.10);border-radius:10px;background:#0C0D12}
+.launch-creative img{display:block;width:100%;height:116px;object-fit:cover;object-position:top center;background:#161922}
+.candidate-b .launch-creative img{height:132px}
+.launch-creative figcaption{padding:7px 8px;color:#FAFBFC;font-size:11px;font-weight:600;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.launch-product{margin-top:12px;padding:12px;border:1px solid rgba(255,255,255,.10);border-radius:16px;background:#101218}
+.launch-product-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:9px}
+.launch-product-head h2{margin:0;color:#FAFBFC;font-size:20px;font-weight:700;letter-spacing:-.02em}
+.launch-product-head span{color:#878C96;font-size:13px}
 .launch-quadrants{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
-.launch-quadrant{min-height:128px;padding:14px;border:1px solid rgba(255,255,255,.10);border-radius:12px;background:#0C0D12}
-.launch-quadrant b{display:block;color:#FAFBFC;font-size:34px;font-weight:800;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
-.launch-quadrant strong{display:block;min-height:42px;margin-top:8px;color:#FAFBFC;font-size:17px;font-weight:600;line-height:1.15}
-.launch-quadrant small{display:block;margin-top:4px;color:#878C96;font-size:16px}
-.launch-bar{display:block;height:8px;margin-top:10px;overflow:hidden;border-radius:999px;background:rgba(255,255,255,.10)}
+.launch-quadrant{min-height:82px;padding:10px;border:1px solid rgba(255,255,255,.10);border-radius:10px;background:#0C0D12}
+.launch-quadrant b{display:block;color:#FAFBFC;font-size:25px;font-weight:800;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
+.launch-quadrant strong{display:block;min-height:29px;margin-top:5px;color:#FAFBFC;font-size:13px;font-weight:600;line-height:1.1}
+.launch-quadrant small{display:block;margin-top:2px;color:#878C96;font-size:12px}
+.launch-bar{display:block;height:5px;margin-top:6px;overflow:hidden;border-radius:999px;background:rgba(255,255,255,.10)}
 .launch-bar i{display:block;height:100%;border-radius:999px;background:#3D6CFF}
-.launch-comparison{margin-top:14px;overflow:hidden;border:1px solid rgba(255,255,255,.10);border-radius:18px;background:#0C0D12}
-.launch-comparison-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid rgba(255,255,255,.10)}
-.launch-comparison-head h2{margin:0;color:#FAFBFC;font-size:24px;font-weight:700;letter-spacing:-.015em}
-.launch-comparison-head span{color:#878C96;font-size:16px}
-.launch-table-head,.launch-row{display:grid;grid-template-columns:1.25fr .72fr .8fr .8fr 1.05fr;align-items:center;column-gap:12px;padding:9px 16px}
+.launch-comparison{margin-top:10px;overflow:hidden;border:1px solid rgba(255,255,255,.10);border-radius:16px;background:#0C0D12}
+.launch-comparison-head{display:flex;align-items:center;justify-content:space-between;padding:9px 13px;border-bottom:1px solid rgba(255,255,255,.10)}
+.launch-comparison-head h2{margin:0;color:#FAFBFC;font-size:18px;font-weight:700;letter-spacing:-.015em}
+.launch-comparison-head span{color:#878C96;font-size:12px}
+.launch-table-head,.launch-row{display:grid;grid-template-columns:1.25fr .72fr .8fr .8fr 1.05fr;align-items:center;column-gap:9px;padding:6px 13px}
 .launch-table-head{background:#101218;color:#878C96;font-size:13px;font-weight:600;letter-spacing:.05em;text-transform:uppercase}
-.launch-row{min-height:50px;border-top:1px solid rgba(255,255,255,.10);color:#FAFBFC;font-size:17px}
+.launch-row{min-height:34px;border-top:1px solid rgba(255,255,255,.10);color:#FAFBFC;font-size:13px}
 .launch-row:nth-child(odd){background:#101218}
-.launch-row strong{color:#FAFBFC;font-size:18px;font-weight:600}
+.launch-row strong{color:#FAFBFC;font-size:14px;font-weight:600}
 .launch-row .num{text-align:right;font-variant-numeric:tabular-nums}
-.launch-row .posture{display:inline-flex;width:max-content;padding:5px 9px;border:1px solid rgba(255,255,255,.10);border-radius:999px;background:#0C0D12;color:#FAFBFC;font-size:14px;font-weight:600;line-height:1.2}
+.launch-row .posture{display:inline-flex;width:max-content;padding:3px 7px;border:1px solid rgba(255,255,255,.10);border-radius:999px;background:#0C0D12;color:#FAFBFC;font-size:11px;font-weight:600;line-height:1.2}
 .launch-row .posture.posture-muted{color:#5C616B}
-.launch-footer{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-top:15px;color:#878C96;font-size:16px}
+.launch-footer{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-top:9px;color:#878C96;font-size:12px}
 .launch-footer strong{color:#FAFBFC;font-weight:600}
 """
 
@@ -1079,9 +1090,9 @@ def _render_hero_pngs_once(
     rendered: list[Path] = []
     with tempfile.TemporaryDirectory(prefix="competitor-inbox-hero-") as temporary:
         temporary_root = Path(temporary)
-        profile = temporary_root / "profile"
-        profile.mkdir(mode=0o700)
         for source in sources:
+            profile = temporary_root / f"profile-{source.stem}"
+            profile.mkdir(mode=0o700)
             if not source.is_file():
                 raise HeroRenderError("hero HTML is missing")
             document = source.read_text(encoding="utf-8").casefold()
@@ -1459,7 +1470,7 @@ def _render_real_launch_hero(summary: Mapping[str, Any], variant: str) -> str:
         )
 
     comparison_rows: list[str] = []
-    for brand in list(summary.get("brands", []))[:4]:
+    for brand in list(summary.get("brands", []))[:5]:
         if not isinstance(brand, Mapping):
             continue
         quadrants = dict(brand.get("quadrants", {}) or {})
@@ -1483,6 +1494,53 @@ def _render_real_launch_hero(summary: Mapping[str, Any], variant: str) -> str:
             "</div>"
         )
 
+    gallery = summary.get("_creative_gallery", {})
+    gallery_rows = gallery.get("brands", []) if isinstance(gallery, Mapping) else []
+    preferred = (
+        ("SKIMS", "Liquid Death", "Act+Acre", "Allbirds", "Athletic Brewing", "Caraway", "Culture Pop")
+        if variant == "brand"
+        else ("Liquid Death", "Culture Pop", "Athletic Brewing", "Caraway", "Allbirds", "Act+Acre")
+    )
+    by_name = {
+        str(row.get("brand") or ""): row
+        for row in gallery_rows
+        if isinstance(row, Mapping) and row.get("items")
+    }
+    ordered_names = [name for name in preferred if name in by_name]
+    ordered_names.extend(
+        sorted(
+            (name for name in by_name if name not in ordered_names),
+            key=str.casefold,
+        )
+    )
+    creative_limit = 7 if variant == "brand" else 6
+    creative_cards: list[str] = []
+    for name in ordered_names[:creative_limit]:
+        items = by_name[name].get("items", [])
+        item = items[0] if isinstance(items, list) and items else {}
+        data_uri = (
+            _safe_gallery_data_uri(item.get("data_uri"))
+            if isinstance(item, Mapping)
+            else None
+        )
+        if data_uri is None:
+            continue
+        creative_cards.append(
+            '<figure class="launch-creative">'
+            f'<img src="{html.escape(data_uri, quote=True)}" '
+            f'alt="Privacy-reviewed email creative from {_e(name)}">'
+            f'<figcaption>{_e(name)}</figcaption></figure>'
+        )
+    gallery_status = str(gallery.get("provenance_status") or "") if isinstance(gallery, Mapping) else ""
+    creative_surface = (
+        '<div class="launch-creatives">'
+        '<div class="launch-creatives-head"><h2>Messaging Library</h2>'
+        f'<span>{len(creative_cards)} privacy-reviewed local renders</span></div>'
+        f'<div class="launch-creative-grid">{"".join(creative_cards)}</div></div>'
+        if creative_cards and gallery_status == "verified"
+        else ""
+    )
+
     candidate_class = "candidate-a" if variant == "brand" else "candidate-b"
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=1080">
     <meta http-equiv="Content-Security-Policy" content="{_e(_CSP)}"><meta name="referrer" content="no-referrer"><title>Competitor Inbox real dashboard</title><style>{_inter_tight_font_face()}{_REAL_HERO_CSS}</style></head>
@@ -1490,6 +1548,7 @@ def _render_real_launch_hero(summary: Mapping[str, Any], variant: str) -> str:
 <div class="launch-hero-top"><span class="launch-hero-brand">The Competitor Inbox</span><span class="launch-coverage">{_e(coverage_label)}</span></div>
 <h1 class="launch-hero-title">{_e(title)}</h1><p class="launch-hero-sub">{_e(subtitle)}</p><div class="launch-window">{_e(_date_window(metadata))}</div>
 <div class="launch-stats"><div class="launch-stat"><b>{distinct:,}</b><span>Distinct messages</span></div><div class="launch-stat primary"><b>{broadcasts:,}</b><span>Qualified broadcasts</span></div><div class="launch-stat"><b>{brands}</b><span>Brands</span></div></div>
+{creative_surface}
 <div class="launch-product"><div class="launch-product-head"><h2>Evergreen and promotional engine</h2><span>n={broadcasts:,} broadcasts</span></div><div class="launch-quadrants">{''.join(quadrant_cards)}</div></div>
 <div class="launch-comparison"><div class="launch-comparison-head"><h2>Competitor comparison</h2><span>Top rows from the real census</span></div>
 <div class="launch-table-head"><span>Brand</span><span>Broadcasts</span><span>Evergreen</span><span>Promotion</span><span>Posture</span></div>{''.join(comparison_rows)}</div>

@@ -251,12 +251,14 @@ def _manifest_provenance_is_valid(
     items = manifest.get("items")
     if not isinstance(coverage, Mapping) or not isinstance(items, list):
         return False
-    if {str(name) for name in coverage} != set(brands):
+    coverage_brands = {str(name) for name in coverage}
+    census_brands = set(brands)
+    if not coverage_brands or not coverage_brands.issubset(census_brands):
         return False
     coverage_totals = {
         name: 0 for name in ("requested", "rendered", "skipped", "failed")
     }
-    for brand in brands:
+    for brand in sorted(coverage_brands, key=str.casefold):
         row = coverage.get(brand)
         if not isinstance(row, Mapping):
             return False
@@ -315,7 +317,7 @@ def _manifest_provenance_is_valid(
     ):
         return False
 
-    rendered_by_brand = {brand: 0 for brand in brands}
+    rendered_by_brand = {brand: 0 for brand in coverage_brands}
     for item in items:
         if not isinstance(item, Mapping):
             return False
@@ -336,7 +338,7 @@ def _manifest_provenance_is_valid(
         rendered_by_brand[brand] += 1
     return all(
         rendered_by_brand[brand] == int(coverage[brand]["rendered"])
-        for brand in brands
+        for brand in coverage_brands
     )
 
 

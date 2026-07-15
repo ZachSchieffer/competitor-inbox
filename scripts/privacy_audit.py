@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
+import tempfile
 from typing import Iterable, Sequence
 
 
@@ -159,6 +160,82 @@ def _git(repo: Path, args: Sequence[str], *, check: bool = True) -> bytes:
         message = result.stderr.decode("utf-8", "replace").strip()
         raise RuntimeError(f"git command failed ({' '.join(args)}): {message}")
     return result.stdout
+
+
+def _git_object_inventory(repo: Path) -> tuple[set[str], set[str]]:
+    """Return reachable and complete local object IDs without batch-all-objects.
+
+    Some macOS Git builds stall while sorting loose objects for
+    ``--batch-all-objects``. Reachable IDs come from rev-list, while loose and
+    packed inventories are read independently so unreachable objects remain in
+    scope.
+    """
+
+    reachable = {
+        line.decode("ascii", "replace")
+        for line in _git(
+            repo, ["rev-list", "--objects", "--no-object-names", "--all"]
+        ).splitlines()
+        if line
+    }
+    inventory = set(reachable)
+    git_dir_value = _git(repo, ["rev-parse", "--git-dir"]).decode().strip()
+    git_dir = Path(git_dir_value)
+    if not git_dir.is_absolute():
+        git_dir = repo / git_dir
+    objects = git_dir.resolve() / "objects"
+    for prefix in objects.iterdir():
+        if not prefix.is_dir() or not re.fullmatch(r"[0-9a-f]{2}", prefix.name):
+            continue
+        for value in prefix.iterdir():
+            if value.is_file() and re.fullmatch(r"[0-9a-f]{38}", value.name):
+                inventory.add(prefix.name + value.name)
+    for index in sorted((objects / "pack").glob("*.idx")):
+        for line in _git(repo, ["verify-pack", "-v", str(index)]).splitlines():
+            oid = line.partition(b" ")[0].decode("ascii", "replace")
+            if re.fullmatch(r"[0-9a-f]{40}", oid):
+                inventory.add(oid)
+    return reachable, inventory
+
+
+def _git_batch_objects(
+    repo: Path, object_ids: Iterable[str]
+) -> Iterable[tuple[str, str, bytes]]:
+    requested = sorted(set(object_ids))
+    if not requested:
+        return
+    with tempfile.TemporaryFile() as output:
+        result = subprocess.run(
+            ["git", "cat-file", "--batch"],
+            cwd=repo,
+            input=("\n".join(requested) + "\n").encode("ascii"),
+            stdout=output,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        output.seek(0)
+        payload = output.read()
+    if result.returncode != 0:
+        message = result.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"git cat-file batch failed: {message}")
+    offset = 0
+    while offset < len(payload):
+        line_end = payload.find(b"\n", offset)
+        if line_end < 0:
+            raise RuntimeError("git cat-file batch returned a truncated header")
+        header = payload[offset:line_end].split()
+        offset = line_end + 1
+        if len(header) != 3:
+            raise RuntimeError("git cat-file batch returned an invalid header")
+        oid = header[0].decode("ascii", "replace")
+        object_type = header[1].decode("ascii", "replace")
+        size = int(header[2])
+        data = payload[offset : offset + size]
+        offset += size
+        if payload[offset : offset + 1] != b"\n":
+            raise RuntimeError("git cat-file batch returned a truncated payload")
+        offset += 1
+        yield oid, object_type, data
 
 
 def _load_deny_rules(path: Path | None) -> tuple[tuple[str, re.Pattern[bytes]], ...]:
@@ -330,36 +407,28 @@ def _nul_paths(payload: bytes) -> list[str]:
 def _all_git_blobs(repo: Path) -> Iterable[tuple[str, str, str, bytes]]:
     """Yield every reachable and unreachable blob with a redacted-safe label."""
 
-    reachable_output = _git(repo, ["rev-list", "--objects", "--all"])
     reachable_paths: dict[str, str] = {}
-    for line in reachable_output.splitlines():
-        if not line:
-            continue
-        oid_bytes, _, path_bytes = line.partition(b" ")
-        oid = oid_bytes.decode("ascii", "replace")
-        if not oid:
-            continue
-        path = path_bytes.decode("utf-8", "surrogateescape")
-        if path:
+    commits = _git(repo, ["rev-list", "--all"]).splitlines()
+    for commit in commits:
+        tree = _git(repo, ["ls-tree", "-r", "-z", commit.decode("ascii")])
+        for entry in tree.split(b"\0"):
+            if not entry or b"\t" not in entry:
+                continue
+            metadata, path_bytes = entry.split(b"\t", 1)
+            fields = metadata.split()
+            if len(fields) != 3 or fields[1] != b"blob":
+                continue
+            oid = fields[2].decode("ascii", "replace")
+            path = path_bytes.decode("utf-8", "surrogateescape")
             reachable_paths.setdefault(oid, path)
 
-    inventory = _git(
-        repo,
-        [
-            "cat-file",
-            "--batch-all-objects",
-            "--batch-check=%(objectname) %(objecttype)",
-        ],
-    )
-    for line in inventory.splitlines():
-        oid_bytes, _, type_bytes = line.partition(b" ")
-        if type_bytes.strip() != b"blob":
+    reachable, inventory = _git_object_inventory(repo)
+    for oid, object_type, data in _git_batch_objects(repo, inventory):
+        if object_type != "blob":
             continue
-        oid = oid_bytes.decode("ascii", "replace")
         reachable = oid in reachable_paths
         scope = "history" if reachable else "unreachable"
         path = reachable_paths.get(oid, f"<unreachable-blob:{oid[:12]}>")
-        data = _git(repo, ["cat-file", "-p", oid])
         yield scope, oid, path, data
 
 
@@ -381,24 +450,10 @@ def _index_gitlinks(repo: Path) -> Iterable[tuple[str, str]]:
 def _all_gitlinks(repo: Path) -> Iterable[tuple[str, str, str, str]]:
     """Yield gitlinks from every reachable and unreachable tree object."""
 
-    reachable = {
-        line.partition(b" ")[0].decode("ascii", "replace")
-        for line in _git(repo, ["rev-list", "--objects", "--all"]).splitlines()
-        if line
-    }
-    inventory = _git(
-        repo,
-        [
-            "cat-file",
-            "--batch-all-objects",
-            "--batch-check=%(objectname) %(objecttype)",
-        ],
-    )
-    for line in inventory.splitlines():
-        tree_bytes, _, type_bytes = line.partition(b" ")
-        if type_bytes.strip() != b"tree":
+    reachable, inventory = _git_object_inventory(repo)
+    for tree_oid, object_type, _data in _git_batch_objects(repo, inventory):
+        if object_type != "tree":
             continue
-        tree_oid = tree_bytes.decode("ascii", "replace")
         scope = "history" if tree_oid in reachable else "unreachable"
         for record in _git(repo, ["ls-tree", "-z", tree_oid]).split(b"\0"):
             if not record or b"\t" not in record:

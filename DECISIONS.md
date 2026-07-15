@@ -3,6 +3,27 @@
 This file records implementation judgments and blockers. Entries use UTC so
 evidence from local and automated runs can be compared directly.
 
+## 2026-07-15T21:15:00Z: Launch-gallery unfreeze
+
+- Authority: Zach's approved surgical unfreeze.
+- Decision: keep the launch census at 3,844 distinct messages, 3,755 qualified
+  broadcasts, and 33 brands. The live inbox advanced after the freeze, so
+  launch assets are rebuilt from records observed through 2026-07-14 and the
+  locked pipeline counts instead of the current rolling census.
+- Decision: use the audited full-archive v7 render set instead of the older
+  125-render launch sample. The older sample failed the later provenance
+  review; v7 is hash-bound, privacy-reviewed, and contains 2,998 cleared
+  renders. The product loads up to 5 previews per brand, which currently yields
+  139 visible previews across 30 brands.
+- Decision: remove the requirement that a safe-render manifest contain a
+  coverage row for every census brand. Partial and zero-render brands remain in
+  the dashboard with an explicit unavailable state and their subject-line
+  table fallback.
+- Privacy: real creative thumbnails stay private and enter generated private
+  dashboard and launch assets only as local data URIs. The repository continues
+  to contain synthetic demo imagery only.
+- Status: active for v1.0.5.
+
 ## 2026-07-14T09:45:00Z: New public Git history
 
 - Authority: approved execution plan.
