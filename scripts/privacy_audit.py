@@ -204,11 +204,13 @@ def _git_batch_objects(
     requested = sorted(set(object_ids))
     if not requested:
         return
-    with tempfile.TemporaryFile() as output:
+    with tempfile.TemporaryFile() as source, tempfile.TemporaryFile() as output:
+        source.write(("\n".join(requested) + "\n").encode("ascii"))
+        source.seek(0)
         result = subprocess.run(
             ["git", "cat-file", "--batch"],
             cwd=repo,
-            input=("\n".join(requested) + "\n").encode("ascii"),
+            stdin=source,
             stdout=output,
             stderr=subprocess.PIPE,
             check=False,
