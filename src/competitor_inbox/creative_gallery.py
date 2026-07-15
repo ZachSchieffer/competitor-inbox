@@ -11,6 +11,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+import stat
 import struct
 import zlib
 from datetime import date as calendar_date
@@ -23,7 +25,11 @@ from .store import UnsafeDataRootError, read_bytes_no_follow
 GALLERY_TARGET_MIN = 3
 GALLERY_TARGET_MAX = 5
 DEFAULT_MANIFEST_RELATIVE_PATH = Path(
-    "creatives/manifests/launch-sample-manifest.json"
+    "creatives/manifests/full-archive-v7-manifest.json"
+)
+AUTHORITATIVE_PIPELINE_VERSION = "2026-07-15.8"
+AUTHORITATIVE_MANIFEST_SHA256 = (
+    "8d6b2ef31c7510ad7b1ae43a3062b5df55179ec14da1f6970b6828a6537871fe"
 )
 _MAX_THUMBNAIL_BYTES = 1_500_000
 _MAX_GALLERY_BYTES = 32_000_000
@@ -47,6 +53,7 @@ _CATEGORY_LABELS = {
     "synthetic seasonal preview": "Synthetic seasonal preview",
 }
 _CATEGORY_FALLBACK = "Safe creative preview"
+_SHA256_HEX_LENGTH = 64
 
 
 def _brand_names(summary: Mapping[str, Any]) -> list[str]:
@@ -138,6 +145,201 @@ def _image_mime(path: Path, payload: bytes) -> str | None:
     return None
 
 
+def _sha256_regular_file(path: Path) -> str | None:
+    """Hash one regular file without following a final-component symlink."""
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        digest = hashlib.sha256()
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        return digest.hexdigest()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _valid_sha256(value: Any) -> bool:
+    raw = str(value or "")
+    return len(raw) == _SHA256_HEX_LENGTH and all(
+        character in "0123456789abcdef" for character in raw
+    )
+
+
+def _manifest_provenance_is_valid(
+    manifest: Mapping[str, Any],
+    *,
+    manifest_sha256: str,
+    current_master_sha256: str | None,
+    brands: Sequence[str],
+    require_authoritative_manifest_hash: bool,
+) -> bool:
+    """Bind gallery inputs to an audited full-archive render.
+
+    The compiled-in default is an immutable, hash-bound archive snapshot. It
+    remains valid when the live inbox advances after that render. Explicit
+    manifests are not trusted by hash, so they must still match the current
+    private master exactly.
+    """
+
+    if (
+        require_authoritative_manifest_hash
+        and manifest_sha256 != AUTHORITATIVE_MANIFEST_SHA256
+    ):
+        return False
+    manifest_master_sha256 = str(manifest.get("master_sha256") or "")
+    if (
+        manifest.get("pipeline_version") != AUTHORITATIVE_PIPELINE_VERSION
+        or manifest.get("mode") != "full_archive"
+        or manifest.get("state") != "complete"
+        or manifest.get("outcome") not in {"complete", "complete_with_exclusions"}
+        or not _valid_sha256(manifest_master_sha256)
+        or (
+            not require_authoritative_manifest_hash
+            and current_master_sha256 != manifest_master_sha256
+        )
+    ):
+        return False
+
+    count_names = (
+        "qualified_broadcasts",
+        "requested",
+        "processed",
+        "resolved",
+        "rendered",
+        "skipped",
+        "failed",
+        "pending_total",
+        "pending_unprocessed",
+        "retryable_pending",
+    )
+    counts = {name: _nonnegative_int(manifest.get(name)) for name in count_names}
+    if any(value is None for value in counts.values()):
+        return False
+    if not (
+        counts["qualified_broadcasts"]
+        == counts["requested"]
+        == counts["processed"]
+        == counts["resolved"]
+    ):
+        return False
+    if counts["resolved"] != (
+        counts["rendered"] + counts["skipped"] + counts["failed"]
+    ):
+        return False
+    if any(
+        counts[name] != 0
+        for name in ("pending_total", "pending_unprocessed", "retryable_pending")
+    ):
+        return False
+
+    coverage = manifest.get("coverage")
+    items = manifest.get("items")
+    if not isinstance(coverage, Mapping) or not isinstance(items, list):
+        return False
+    if {str(name) for name in coverage} != set(brands):
+        return False
+    coverage_totals = {
+        name: 0 for name in ("requested", "rendered", "skipped", "failed")
+    }
+    for brand in brands:
+        row = coverage.get(brand)
+        if not isinstance(row, Mapping):
+            return False
+        row_counts = {
+            name: _nonnegative_int(row.get(name))
+            for name in (
+                "requested",
+                "processed",
+                "resolved",
+                "rendered",
+                "skipped",
+                "failed",
+                "pending_total",
+                "pending_unprocessed",
+                "retryable_pending",
+            )
+        }
+        if any(value is None for value in row_counts.values()):
+            return False
+        if not (
+            row_counts["requested"]
+            == row_counts["processed"]
+            == row_counts["resolved"]
+        ):
+            return False
+        if row_counts["resolved"] != (
+            row_counts["rendered"] + row_counts["skipped"] + row_counts["failed"]
+        ):
+            return False
+        if any(
+            row_counts[name] != 0
+            for name in ("pending_total", "pending_unprocessed", "retryable_pending")
+        ):
+            return False
+        for name in coverage_totals:
+            coverage_totals[name] += row_counts[name]
+    if any(coverage_totals[name] != counts[name] for name in coverage_totals):
+        return False
+    if len(items) != counts["rendered"]:
+        return False
+
+    privacy_controls = manifest.get("privacy_controls")
+    if not isinstance(privacy_controls, Mapping):
+        return False
+    required_controls = {
+        "asset_cache_private": True,
+        "cookies": False,
+        "javascript": False,
+        "recipient_terms_removed": True,
+        "remote_runtime_requests": False,
+        "sanitized_html_transient": True,
+    }
+    if any(
+        privacy_controls.get(key) is not value
+        for key, value in required_controls.items()
+    ):
+        return False
+
+    rendered_by_brand = {brand: 0 for brand in brands}
+    for item in items:
+        if not isinstance(item, Mapping):
+            return False
+        brand = str(item.get("brand") or "")
+        ocr_gate = item.get("ocr_privacy_gate")
+        if (
+            brand not in rendered_by_brand
+            or item.get("status") != "success"
+            or item.get("scope") != "broadcast"
+            or item.get("pipeline_version") != AUTHORITATIVE_PIPELINE_VERSION
+            or item.get("source_master_sha256") != manifest_master_sha256
+            or not _valid_sha256(item.get("thumbnail_sha256"))
+            or not isinstance(ocr_gate, Mapping)
+            or ocr_gate.get("passed") is not True
+            or ocr_gate.get("reason") != "clean"
+        ):
+            return False
+        rendered_by_brand[brand] += 1
+    return all(
+        rendered_by_brand[brand] == int(coverage[brand]["rendered"])
+        for brand in brands
+    )
+
+
 def normalize_creative_metadata(date_value: Any, category_value: Any) -> tuple[str, str]:
     """Return a real ISO date and one bounded creative-taxonomy label."""
 
@@ -173,11 +375,14 @@ def _load_thumbnail(creative_root: Path, item: Mapping[str, Any]) -> dict[str, s
     date, category = normalize_creative_metadata(
         item.get("date"), item.get("category")
     )
+    sha256 = hashlib.sha256(payload).hexdigest()
+    if sha256 != str(item.get("thumbnail_sha256") or ""):
+        return None
     return {
         "date": date,
         "category": category,
         "mime_type": mime,
-        "sha256": hashlib.sha256(payload).hexdigest(),
+        "sha256": sha256,
         "data_uri": f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}",
     }
 
@@ -198,6 +403,7 @@ def load_private_creative_gallery(
     brands = _brand_names(summary)
     root = Path(data_root).expanduser().resolve(strict=True)
     creative_root = root / "creatives"
+    using_authoritative_default = manifest_path is None
     selected_manifest = (
         Path(manifest_path).expanduser()
         if manifest_path is not None
@@ -227,7 +433,8 @@ def load_private_creative_gallery(
             metadata_status="unavailable",
         )
     try:
-        manifest = json.loads(read_bytes_no_follow(resolved_manifest).decode("utf-8"))
+        manifest_bytes = read_bytes_no_follow(resolved_manifest)
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError, UnsafeDataRootError):
         return _unavailable_gallery(
             brands,
@@ -238,6 +445,19 @@ def load_private_creative_gallery(
         return _unavailable_gallery(
             brands,
             reason="The safe creative manifest has an unsupported format.",
+            metadata_status="invalid",
+        )
+
+    if not _manifest_provenance_is_valid(
+        manifest,
+        manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        current_master_sha256=_sha256_regular_file(root / "master.json"),
+        brands=brands,
+        require_authoritative_manifest_hash=using_authoritative_default,
+    ):
+        return _unavailable_gallery(
+            brands,
+            reason="The safe creative manifest failed its provenance check.",
             metadata_status="invalid",
         )
 
@@ -317,6 +537,7 @@ def load_private_creative_gallery(
     unavailable = sum(row["status"] == "unavailable" for row in rows)
     return {
         "metadata_status": "available",
+        "provenance_status": "verified",
         "manifest_generated_at": str(manifest.get("generated_at") or ""),
         "target_min": GALLERY_TARGET_MIN,
         "target_max": GALLERY_TARGET_MAX,
@@ -403,6 +624,8 @@ def synthetic_creative_gallery(summary: Mapping[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
+    "AUTHORITATIVE_MANIFEST_SHA256",
+    "AUTHORITATIVE_PIPELINE_VERSION",
     "DEFAULT_MANIFEST_RELATIVE_PATH",
     "GALLERY_TARGET_MAX",
     "GALLERY_TARGET_MIN",

@@ -933,3 +933,52 @@ evidence from local and automated runs can be compared directly.
   only failure under the real home is the expected existing-plist assertion.
 - Impact: no production schedule, launch asset, frozen hash, or public branch
   changed for testing.
+
+## 2026-07-15: Gallery input is bound to the audited full archive
+
+- Authority: Gallery v1.1, full-archive provenance, and fail-closed privacy
+  requirements.
+- Finding: the first gallery implementation defaulted to the older
+  `launch-sample-manifest.json`. That sample preceded the final hardened
+  archive and could make brands with no v7-safe render appear gallery-ready.
+- Decision: default exclusively to
+  `creatives/manifests/full-archive-v7-manifest.json` and bind the build to
+  pipeline `2026-07-15.8`, manifest SHA-256
+  `8d6b2ef31c7510ad7b1ae43a3062b5df55179ec14da1f6970b6828a6537871fe`,
+  plus the source-master SHA-256 embedded throughout that exact manifest. Any
+  mismatch inside the immutable archive produces an explicit unavailable state
+  for every census brand.
+- Controls: verify global and per-brand accounting, complete state, zero
+  pending records, all 33 census coverage rows, required privacy-control flags,
+  item-level pipeline and source-master bindings, clean offline OCR gates, and
+  each loaded thumbnail against its manifest SHA-256.
+- Evidence: the real v7 default passes provenance and exposes 139 validated
+  previews: 27 brands ready, 3 insufficient, and 3 unavailable. Four Sigmatic
+  has 1, SKIMS has 1, Thorne has 2, and Glossier, Poppi, and LMNT have 0.
+  Gallery regression tests pass, including stale-pipeline, current-master, and
+  stale-default rejection cases.
+- Boundary: the frozen census, dashboard, screenshots, Notion, Asana, Drive,
+  `main`, public tags, and releases were not changed. Distribution remains
+  locked.
+
+## 2026-07-15: The immutable gallery archive survives later inbox updates
+
+- Authority: Phase 2 gallery coverage, frozen-census integrity, and the daily
+  update contract.
+- Finding: the installed 7:00 AM scheduler added 5 qualified broadcasts after
+  the launch package had already frozen at 3,755. The launch package remained
+  unchanged, but the v1.1 gallery rejected its exact audited archive because
+  provenance also required the current mutable `master.json` byte hash.
+- Decision: the compiled-in default now trusts only the exact authoritative
+  full-archive manifest SHA-256 and its item-level source-master bindings, so
+  that immutable snapshot remains usable after the live inbox advances.
+  Explicit or test-supplied manifests still require an exact current-master
+  match because they do not have a compiled-in trust anchor.
+- Evidence: the authoritative manifest remains pipeline `2026-07-15.8`, SHA-256
+  `8d6b2ef31c7510ad7b1ae43a3062b5df55179ec14da1f6970b6828a6537871fe`,
+  with all 3,755 records resolved and 2,998 privacy-cleared renders. A new
+  regression test advances the live master after the archive is written and
+  confirms the hash-bound default stays available; the existing explicit-
+  manifest mismatch test continues to fail closed.
+- Boundary: no frozen launch asset, census, Notion page, Asana task, Drive
+  file, `main` commit, public tag, release, or distribution surface changed.

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import struct
 import zlib
 from pathlib import Path
 
+import competitor_inbox.creative_gallery as creative_gallery_module
 from competitor_inbox.creative_gallery import (
+    AUTHORITATIVE_MANIFEST_SHA256,
+    AUTHORITATIVE_PIPELINE_VERSION,
+    DEFAULT_MANIFEST_RELATIVE_PATH,
     load_private_creative_gallery,
     synthetic_creative_gallery,
 )
@@ -34,7 +39,26 @@ def _fixture_png(seed: int) -> bytes:
     )
 
 
-def _private_gallery_fixture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
+def _coverage_row(*, requested: int, rendered: int, skipped: int) -> dict[str, object]:
+    return {
+        "available_records": requested,
+        "requested": requested,
+        "processed": requested,
+        "resolved": requested,
+        "rendered": rendered,
+        "skipped": skipped,
+        "failed": 0,
+        "pending_total": 0,
+        "pending_unprocessed": 0,
+        "retryable_pending": 0,
+        "state": "complete",
+        "outcome": "complete" if skipped == 0 else "complete_with_exclusions",
+    }
+
+
+def _private_gallery_fixture(
+    tmp_path: Path,
+) -> tuple[Path, dict[str, object], Path]:
     root = ensure_private_data_root(tmp_path / "private")
     creative_root = root / "creatives"
     thumbnails = creative_root / "thumbnails"
@@ -42,52 +66,107 @@ def _private_gallery_fixture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
     thumbnails.mkdir(parents=True)
     manifests.mkdir(parents=True)
 
+    master_payload = b'{"records":[]}\n'
+    (root / "master.json").write_bytes(master_payload)
+    master_sha256 = hashlib.sha256(master_payload).hexdigest()
+
+    def item(
+        *,
+        brand: str,
+        date: str,
+        record_id: str,
+        thumbnail_path: str,
+        thumbnail_sha256: str,
+        category: str = "evergreen",
+    ) -> dict[str, object]:
+        return {
+            "brand": brand,
+            "date": date,
+            "status": "success",
+            "scope": "broadcast",
+            "pipeline_version": AUTHORITATIVE_PIPELINE_VERSION,
+            "source_master_sha256": master_sha256,
+            "record_id": record_id,
+            "category": category,
+            "thumbnail_path": thumbnail_path,
+            "thumbnail_sha256": thumbnail_sha256,
+            "ocr_privacy_gate": {"passed": True, "reason": "clean"},
+        }
+
     items: list[dict[str, object]] = []
     for index in range(1, 8):
         filename = f"ready-{index}.png"
-        (thumbnails / filename).write_bytes(_fixture_png(index))
+        payload = _fixture_png(index)
+        (thumbnails / filename).write_bytes(payload)
         items.append(
-            {
-                "brand": "Ready Brand",
-                "date": f"2026-07-{index:02d}",
-                "status": "success",
-                "record_id": f"private-record-{index}",
-                "category": "evergreen",
-                "thumbnail_path": f"thumbnails/{filename}",
-            }
+            item(
+                brand="Ready Brand",
+                date=f"2026-07-{index:02d}",
+                record_id=f"private-record-{index}",
+                thumbnail_path=f"thumbnails/{filename}",
+                thumbnail_sha256=hashlib.sha256(payload).hexdigest(),
+            )
         )
-    (thumbnails / "four-sigmatic.png").write_bytes(_fixture_png(20))
+    four_payload = _fixture_png(20)
+    (thumbnails / "four-sigmatic.png").write_bytes(four_payload)
     items.append(
         {
-            "brand": "Four Sigmatic",
-            "date": "2026-99-99<script>",
-            "status": "success",
-            "record_id": "private-four-sigmatic-record",
-            "category": "<img src=x onerror=alert(1)>",
+            **item(
+                brand="Four Sigmatic",
+                date="2026-99-99<script>",
+                record_id="private-four-sigmatic-record",
+                thumbnail_path="thumbnails/four-sigmatic.png",
+                thumbnail_sha256=hashlib.sha256(four_payload).hexdigest(),
+                category="<img src=x onerror=alert(1)>",
+            ),
             "subject": "Private subject must not enter the card",
             "visible_text": "Private body must not enter the card",
-            "thumbnail_path": "thumbnails/four-sigmatic.png",
         }
     )
     items.append(
-        {
-            "brand": "Missing Brand",
-            "date": "2026-07-11",
-            "status": "success",
-            "record_id": "unsafe-record",
-            "thumbnail_path": "../outside.png",
-        }
+        item(
+            brand="Missing Brand",
+            date="2026-07-11",
+            record_id="unsafe-record",
+            thumbnail_path="../outside.png",
+            thumbnail_sha256=hashlib.sha256(_fixture_png(30)).hexdigest(),
+        )
     )
     manifest = {
         "generated_at": "2026-07-14T00:00:00Z",
+        "pipeline_version": AUTHORITATIVE_PIPELINE_VERSION,
+        "mode": "full_archive",
+        "state": "complete",
+        "outcome": "complete_with_exclusions",
+        "master_sha256": master_sha256,
+        "source_records": 16,
+        "qualified_broadcasts": 16,
+        "requested": 16,
+        "processed": 16,
+        "resolved": 16,
+        "rendered": 9,
+        "skipped": 7,
+        "failed": 0,
+        "pending_total": 0,
+        "pending_unprocessed": 0,
+        "retryable_pending": 0,
+        "privacy_controls": {
+            "asset_cache_private": True,
+            "cookies": False,
+            "javascript": False,
+            "recipient_terms_removed": True,
+            "remote_runtime_requests": False,
+            "sanitized_html_transient": True,
+        },
         "coverage": {
-            "Ready Brand": {"available_records": 7, "rendered": 7},
-            "Four Sigmatic": {"available_records": 2, "rendered": 1},
-            "LMNT": {"available_records": 6, "rendered": 0},
+            "Ready Brand": _coverage_row(requested=7, rendered=7, skipped=0),
+            "Four Sigmatic": _coverage_row(requested=2, rendered=1, skipped=1),
+            "LMNT": _coverage_row(requested=6, rendered=0, skipped=6),
+            "Missing Brand": _coverage_row(requested=1, rendered=1, skipped=0),
         },
         "items": items,
     }
-    manifest_path = manifests / "launch-sample-manifest.json"
+    manifest_path = root / "creatives/manifests/full-archive-v7-manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     summary: dict[str, object] = {
         "brands": [
@@ -97,13 +176,13 @@ def _private_gallery_fixture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
             {"brand": "Missing Brand"},
         ]
     }
-    return root, summary
+    return root, summary, manifest_path
 
 
 def test_private_manifest_caps_ready_brand_and_exposes_thin_states(tmp_path: Path) -> None:
-    root, summary = _private_gallery_fixture(tmp_path)
+    root, summary, manifest_path = _private_gallery_fixture(tmp_path)
 
-    gallery = load_private_creative_gallery(root, summary)
+    gallery = load_private_creative_gallery(root, summary, manifest_path=manifest_path)
     rows = {row["brand"]: row for row in gallery["brands"]}
 
     assert gallery["metadata_status"] == "available"
@@ -140,6 +219,64 @@ def test_private_manifest_caps_ready_brand_and_exposes_thin_states(tmp_path: Pat
     )
 
 
+def test_default_uses_hash_bound_full_archive_not_launch_sample(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, summary, manifest_path = _private_gallery_fixture(tmp_path)
+    stale_path = root / "creatives/manifests/launch-sample-manifest.json"
+    stale_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    stale_manifest["generated_at"] = "2026-07-13T00:00:00Z"
+    stale_path.write_text(json.dumps(stale_manifest), encoding="utf-8")
+    expected_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    monkeypatch.setattr(
+        creative_gallery_module,
+        "AUTHORITATIVE_MANIFEST_SHA256",
+        expected_sha256,
+    )
+    # The daily inbox may advance after the immutable archive is rendered.
+    # Exact default-manifest binding keeps that audited snapshot usable.
+    (root / "master.json").write_text('{"records":["newer-live-message"]}', encoding="utf-8")
+
+    gallery = load_private_creative_gallery(root, summary)
+
+    assert DEFAULT_MANIFEST_RELATIVE_PATH == Path(
+        "creatives/manifests/full-archive-v7-manifest.json"
+    )
+    assert gallery["metadata_status"] == "available"
+    assert gallery["provenance_status"] == "verified"
+    assert gallery["manifest_generated_at"] == "2026-07-14T00:00:00Z"
+
+
+def test_authoritative_manifest_constants_match_audited_archive() -> None:
+    assert AUTHORITATIVE_PIPELINE_VERSION == "2026-07-15.8"
+    assert AUTHORITATIVE_MANIFEST_SHA256 == (
+        "8d6b2ef31c7510ad7b1ae43a3062b5df55179ec14da1f6970b6828a6537871fe"
+    )
+
+
+def test_gallery_fails_closed_when_manifest_is_not_current_master(tmp_path: Path) -> None:
+    root, summary, manifest_path = _private_gallery_fixture(tmp_path)
+    (root / "master.json").write_text('{"records":[{}]}\n', encoding="utf-8")
+
+    gallery = load_private_creative_gallery(root, summary, manifest_path=manifest_path)
+
+    assert gallery["metadata_status"] == "invalid"
+    assert gallery["loaded_safe_creatives"] == 0
+    assert all(row["status"] == "unavailable" for row in gallery["brands"])
+
+
+def test_gallery_fails_closed_on_stale_pipeline_manifest(tmp_path: Path) -> None:
+    root, summary, manifest_path = _private_gallery_fixture(tmp_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["pipeline_version"] = "2026-07-14.2"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    gallery = load_private_creative_gallery(root, summary, manifest_path=manifest_path)
+
+    assert gallery["metadata_status"] == "invalid"
+    assert gallery["loaded_safe_creatives"] == 0
+
+
 def test_missing_manifest_marks_every_census_brand_unavailable(tmp_path: Path) -> None:
     root = ensure_private_data_root(tmp_path / "private")
     summary = {"brands": [{"brand": "LMNT"}, {"brand": "Four Sigmatic"}]}
@@ -155,9 +292,11 @@ def test_missing_manifest_marks_every_census_brand_unavailable(tmp_path: Path) -
 
 
 def test_gallery_renderer_uses_data_images_and_keeps_states_visible(tmp_path: Path) -> None:
-    root, gallery_summary = _private_gallery_fixture(tmp_path)
+    root, gallery_summary, manifest_path = _private_gallery_fixture(tmp_path)
     summary = demo_summary()
-    summary["_creative_gallery"] = load_private_creative_gallery(root, gallery_summary)
+    summary["_creative_gallery"] = load_private_creative_gallery(
+        root, gallery_summary, manifest_path=manifest_path
+    )
 
     document = render_dashboard(summary)
     image_sources = re.findall(r'<img[^>]+src="([^"]+)"', document)
