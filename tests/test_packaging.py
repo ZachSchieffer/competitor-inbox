@@ -90,6 +90,11 @@ def test_real_render_executes_the_complete_output_pipeline(
     monkeypatch.setattr(cli_module, "aggregate_records", lambda *args, **kwargs: deepcopy(summary))
     monkeypatch.setattr(cli_module, "_bind_coverage_integrity", lambda *args: None)
     monkeypatch.setattr(cli_module, "verify_cross_foot", lambda value: None)
+    monkeypatch.setattr(
+        cli_module,
+        "derive_dashboard_weekly_activity",
+        lambda records, value: [],
+    )
 
     def write_heroes(value: object, destination: Path) -> list[Path]:
         destination.mkdir(parents=True, mode=0o700)
@@ -149,6 +154,11 @@ def test_real_render_is_browser_free_by_default(
     monkeypatch.setattr(cli_module, "aggregate_records", lambda *args, **kwargs: deepcopy(summary))
     monkeypatch.setattr(cli_module, "_bind_coverage_integrity", lambda *args: None)
     monkeypatch.setattr(cli_module, "verify_cross_foot", lambda value: None)
+    monkeypatch.setattr(
+        cli_module,
+        "derive_dashboard_weekly_activity",
+        lambda records, value: [],
+    )
 
     def browser_must_not_run(paths: list[Path]) -> list[Path]:
         raise AssertionError("normal dashboard build invoked a browser")

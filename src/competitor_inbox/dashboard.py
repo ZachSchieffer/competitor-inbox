@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import time
 import zlib
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -38,6 +38,16 @@ _HERO_FEED_PREVIEW_WIDTH = 390
 _HERO_MIN_FEED_COPY_PX = 14
 _HERO_FEED_COPY_SOURCE_PX = 40
 _HERO_NAMES = ("hero-brand.html", "hero-portfolio.html")
+_SECTION_CAPTURE_NAMES = (
+    "01-header.png",
+    "02-executive-brief.png",
+    "03-competitor-comparison.png",
+    "04-evergreen-promotional-engine.png",
+    "05-seasonal-planner.png",
+    "06-messaging-library.png",
+    "07-action-plan.png",
+    "08-coverage-methodology.png",
+)
 _BROWSER_CANDIDATES = (
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
@@ -56,6 +66,322 @@ _CSS = r"""
 @media(max-width:900px){.shell{width:min(100% - 28px,1240px)}.mast{padding-top:28px}.mast h1{margin-top:44px}.section-head{display:block}.coverage{display:flex;width:100%;max-width:100%;margin-top:14px;white-space:normal;line-height:1.35}.metrics,.scope-grid,.actions,.method{grid-template-columns:1fr}.grid-two{grid-template-columns:1fr}.occasion-grid{grid-template-columns:1fr 1fr}.quadrant{grid-template-columns:125px 1fr 72px}.metric{min-height:120px}.metric .label{margin-top:18px}section{padding:20px}.brandline{display:flex;flex-direction:column;align-items:flex-start}.stamp,.freshness{margin-top:14px}}
 @media(max-width:520px){.occasion-grid{grid-template-columns:1fr}.mast h1{font-size:43px}.window{display:block}.window span{display:block;margin-top:7px}.quadrant{grid-template-columns:1fr 60px}.quadrant .bar{grid-column:1/-1;grid-row:2}.number{grid-column:2}.section-head h2{font-size:24px}}
 @media print{@page{size:auto;margin:12mm}body{background:#fff}section{box-shadow:none;break-inside:avoid}.hero-page{width:1080px;height:1350px;padding:64px}}
+"""
+
+_DASHBOARD_POLISH_CSS = r"""
+.dashboard-page{
+  --bg:#F5F7FB;
+  --surface:#FFFFFF;
+  --ink:#101828;
+  --muted:#667085;
+  --line:#DCE3ED;
+  --accent:#2664EC;
+  --accent-soft:#EEF3FF;
+  --radius:18px;
+  --shadow:0 10px 30px rgba(31,50,81,.055);
+  min-width:320px;
+  background:
+    radial-gradient(circle at 8% 0%,rgba(38,100,236,.065),transparent 30rem),
+    var(--bg);
+  color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Segoe UI",sans-serif;
+  font-size:15px;
+  line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  overflow-x:hidden;
+}
+.dashboard-page .shell{width:min(1280px,calc(100% - 64px))}
+.dashboard-page .mast{
+  padding:46px 0 40px;
+  border-bottom:1px solid var(--line);
+  background:rgba(255,255,255,.92);
+  box-shadow:0 1px 0 rgba(16,24,40,.02);
+}
+.dashboard-page .brandline{align-items:center}
+.dashboard-page .brand{
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
+  color:#344054;
+  font-size:12px;
+  font-weight:750;
+  letter-spacing:.09em;
+}
+.dashboard-page .brand::before{
+  width:9px;
+  height:9px;
+  border-radius:3px;
+  background:#2664EC;
+  box-shadow:0 0 0 5px rgba(38,100,236,.10);
+  content:"";
+}
+.dashboard-page .stamp,.dashboard-page .freshness{
+  border-color:rgba(38,100,236,.25);
+  background:var(--accent-soft);
+  color:#1D4ED8;
+  font-size:11px;
+  font-weight:700;
+}
+.dashboard-page .mast h1{
+  max-width:780px;
+  margin:62px 0 20px;
+  font-size:clamp(50px,6vw,76px);
+  font-weight:780;
+  letter-spacing:-.055em;
+  line-height:.97;
+  text-wrap:balance;
+}
+.dashboard-page .mast p{
+  max-width:68ch;
+  color:#475467;
+  font-size:18px;
+  line-height:1.55;
+  text-wrap:pretty;
+}
+.dashboard-page .window{
+  gap:0;
+  margin-top:34px;
+  color:#667085;
+  font-size:13px;
+}
+.dashboard-page .window>span:not(.freshness){padding:0 18px;border-left:1px solid var(--line)}
+.dashboard-page .window>span:not(.freshness):first-child{padding-left:0;border-left:0}
+.dashboard-page .window b{color:#1D2939;font-weight:720;font-variant-numeric:tabular-nums}
+.dashboard-page .window .freshness{margin-left:18px}
+.dashboard-page main{padding:48px 0 92px}
+.dashboard-page section{
+  margin:0 0 28px;
+  padding:34px;
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  background:rgba(255,255,255,.97);
+  box-shadow:var(--shadow);
+}
+.dashboard-page .section-head{gap:32px;margin-bottom:30px}
+.dashboard-page .section-head h2{
+  color:#101828;
+  font-size:29px;
+  font-weight:740;
+  letter-spacing:-.035em;
+  line-height:1.12;
+  text-wrap:balance;
+}
+.dashboard-page .section-head p{max-width:65ch;margin-top:9px;color:#667085;line-height:1.55;text-wrap:pretty}
+.dashboard-page .coverage{
+  max-width:360px;
+  border-color:#D5DEEA;
+  border-radius:8px;
+  background:#F8FAFC;
+  color:#475467;
+  font-size:11px;
+  font-weight:600;
+  letter-spacing:.01em;
+  line-height:1.4;
+  white-space:normal;
+  overflow-wrap:anywhere;
+}
+.dashboard-page .metrics{grid-template-columns:1.35fr repeat(3,minmax(0,1fr));gap:14px}
+.dashboard-page .metric{
+  min-height:158px;
+  padding:22px;
+  border-color:#DCE3ED;
+  border-radius:14px;
+  background:#FFFFFF;
+  box-shadow:0 1px 2px rgba(16,24,40,.025);
+}
+.dashboard-page .metric.primary{
+  border-color:#2664EC;
+  background:
+    radial-gradient(circle at 100% 0%,rgba(255,255,255,.17),transparent 48%),
+    #2664EC;
+  box-shadow:0 14px 28px rgba(38,100,236,.18);
+}
+.dashboard-page .metric .value{
+  font-size:45px;
+  font-weight:760;
+  font-variant-numeric:tabular-nums;
+  letter-spacing:-.05em;
+}
+.dashboard-page .metric .label{margin-top:33px;color:#344054;font-size:13px;font-weight:700}
+.dashboard-page .metric .note{color:#7A879A;font-size:11px;line-height:1.4}
+.dashboard-page .metric.primary .label,.dashboard-page .metric.primary .note{color:#EFF4FF}
+.dashboard-page .grid-two{grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr);gap:20px}
+.dashboard-page .subpanel{
+  padding:24px;
+  border-color:#DCE3ED;
+  border-radius:14px;
+  background:#FBFCFE;
+}
+.dashboard-page .subpanel h3{margin-bottom:22px;color:#1D2939;font-size:16px;font-weight:720;letter-spacing:-.01em}
+.dashboard-page .quadrant{
+  grid-template-columns:180px minmax(140px,1fr) 108px;
+  gap:16px;
+  margin-bottom:20px;
+}
+.dashboard-page .quadrant .label{color:#344054;font-size:13px;font-weight:680}
+.dashboard-page .bar-track{
+  display:block;
+  width:100%;
+  height:12px;
+  overflow:hidden;
+  border:1px solid #E1E7F0;
+  border-radius:999px;
+  background:#EDF1F7;
+  box-shadow:inset 0 1px 2px rgba(16,24,40,.05);
+}
+.dashboard-page .bar{display:block;height:100%;min-width:4px;border-radius:999px;background:#2664EC}
+.dashboard-page .bar.secondary{background:#5B84F1}
+.dashboard-page .bar.tertiary{background:#8AA8F5}
+.dashboard-page .bar.quiet{background:#B7C9F9}
+.dashboard-page .number{color:#475467;font-size:12px;line-height:1.35}
+.dashboard-page .finding{padding:16px 0 16px 15px;border-bottom:1px solid #E6EBF2;border-left:2px solid rgba(38,100,236,.22)}
+.dashboard-page .finding:first-child{padding-top:2px}
+.dashboard-page .finding strong{color:#101828;font-size:19px;font-weight:730;letter-spacing:-.02em}
+.dashboard-page .finding span{display:block;margin-top:3px;color:#667085;line-height:1.45}
+.dashboard-page .table-wrap{
+  border:1px solid #D7DFEA;
+  border-radius:14px;
+  background:#FFFFFF;
+  box-shadow:0 1px 2px rgba(16,24,40,.025);
+  scrollbar-color:#B9C5D5 transparent;
+  overscroll-behavior-inline:contain;
+}
+.dashboard-page table{min-width:1060px;border-collapse:separate;border-spacing:0;font-size:13px}
+.dashboard-page th,.dashboard-page td{padding:14px 16px;border-bottom:1px solid #E4E9F1}
+.dashboard-page th{
+  position:sticky;
+  top:0;
+  z-index:1;
+  background:#F7F9FC;
+  color:#667085;
+  font-size:11px;
+  font-weight:750;
+  letter-spacing:.07em;
+}
+.dashboard-page tbody tr{background:#FFFFFF}
+.dashboard-page tbody tr:nth-child(even){background:#FAFBFD}
+.dashboard-page tbody tr:hover{background:#F3F6FC}
+.dashboard-page tbody tr:last-child td{border-bottom:0}
+.dashboard-page th:first-child,.dashboard-page td:first-child{
+  position:sticky;
+  left:0;
+  z-index:2;
+  background:inherit;
+  box-shadow:1px 0 0 #E4E9F1;
+}
+.dashboard-page th:first-child{z-index:3;background:#F7F9FC}
+.dashboard-page td strong{color:#1D2939;font-weight:700}
+.dashboard-page th:last-child,.dashboard-page td:last-child{
+  min-width:178px;
+  max-width:220px;
+  white-space:normal;
+  overflow-wrap:anywhere;
+  line-height:1.35;
+}
+.dashboard-page td.num{color:#344054;font-weight:620}
+.dashboard-page .posture{color:#1D4ED8;font-weight:700}
+.dashboard-page .activity-panel{
+  margin-bottom:24px;
+  padding:24px;
+  border:1px solid #DCE3ED;
+  border-radius:14px;
+  background:#FBFCFE;
+}
+.dashboard-page .activity-head{display:flex;justify-content:space-between;gap:32px;align-items:flex-start;margin-bottom:20px}
+.dashboard-page .activity-head h3{margin:0;color:#1D2939;font-size:16px;font-weight:720;letter-spacing:-.01em}
+.dashboard-page .activity-head p{max-width:68ch;margin:5px 0 0;color:#667085;font-size:12px;line-height:1.45}
+.dashboard-page .heat-legend{display:flex;align-items:center;gap:7px;white-space:nowrap;color:#667085;font-size:10px}
+.dashboard-page .legend-cells{display:flex;gap:3px}
+.dashboard-page .activity-grid{display:grid;grid-template-columns:repeat(52,minmax(3px,1fr));gap:4px}
+.dashboard-page .week-cell{display:block;height:34px;border:1px solid rgba(38,100,236,.08);border-radius:4px;background:#EDF1F7}
+.dashboard-page .week-cell.level-1{background:#DCE7FF}
+.dashboard-page .week-cell.level-2{background:#B9CEFC}
+.dashboard-page .week-cell.level-3{background:#7FA4F6}
+.dashboard-page .week-cell.level-4{background:#2664EC}
+.dashboard-page .activity-labels{display:grid;grid-template-columns:repeat(5,1fr);margin-top:9px;color:#7A879A;font-size:10px}
+.dashboard-page .activity-labels span:nth-child(2),.dashboard-page .activity-labels span:nth-child(3),.dashboard-page .activity-labels span:nth-child(4){text-align:center}
+.dashboard-page .activity-labels span:last-child{text-align:right}
+.dashboard-page .occasion-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.dashboard-page .occasion{min-height:100px;padding:18px;border-color:#DCE3ED;border-radius:12px;background:#FFFFFF}
+.dashboard-page .occasion b{color:#1D2939;font-size:28px;font-weight:740;letter-spacing:-.035em}
+.dashboard-page .occasion span{display:block;margin-top:10px;color:#667085;font-size:12px}
+.dashboard-page .scope-grid{grid-template-columns:1.25fr .875fr .875fr;gap:16px}
+.dashboard-page .scope-block{border-color:#DCE3ED;border-radius:14px;background:#FFFFFF}
+.dashboard-page .scope-block h3{padding:17px 18px;border-bottom-color:#E4E9F1;background:#F8FAFC;color:#344054;font-size:13px;font-weight:720}
+.dashboard-page .message{padding:15px 18px;border-bottom-color:#E7ECF3}
+.dashboard-page .message b{color:#1D2939;font-size:12px;font-weight:660;line-height:1.45;white-space:normal}
+.dashboard-page .message small{color:#7A879A;font-size:10px;line-height:1.4}
+.dashboard-page .actions{gap:16px}
+.dashboard-page .action{position:relative;overflow:hidden;padding:24px;border-color:#DCE3ED;border-radius:14px;background:#FFFFFF}
+.dashboard-page .action::before{position:absolute;inset:0 auto 0 0;width:3px;background:#2664EC;content:""}
+.dashboard-page .action .time{color:#1D4ED8;font-size:10px;font-weight:780;letter-spacing:.08em}
+.dashboard-page .action h3{color:#1D2939;font-size:18px;font-weight:720;letter-spacing:-.02em}
+.dashboard-page .action p{color:#667085;line-height:1.55}
+.dashboard-page .method{gap:48px}
+.dashboard-page .method h3{color:#344054;font-size:13px;font-weight:720}
+.dashboard-page .method p{max-width:64ch;color:#667085;line-height:1.6}
+.dashboard-page .foot{padding:0 0 48px;color:#7A879A;font-size:11px}
+.dashboard-page .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:900px){
+  .dashboard-page .shell{width:min(100% - 40px,1280px)}
+  .dashboard-page .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .dashboard-page .metrics .primary{grid-column:span 2}
+  .dashboard-page .grid-two,.dashboard-page .scope-grid,.dashboard-page .actions,.dashboard-page .method{grid-template-columns:1fr}
+  .dashboard-page .section-head{display:block}
+  .dashboard-page .coverage{margin-top:16px}
+  .dashboard-page .occasion-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media(max-width:520px){
+  .dashboard-page{font-size:14px}
+  .dashboard-page .shell{width:calc(100% - 28px)}
+  .dashboard-page .mast{padding:28px 0 30px}
+  .dashboard-page .brandline{gap:10px}
+  .dashboard-page .brandline{width:100%;align-items:flex-start}
+  .dashboard-page .brand{max-width:100%;font-size:10px;line-height:1.35;white-space:normal;overflow-wrap:anywhere}
+  .dashboard-page .stamp,.dashboard-page .freshness{margin-top:8px}
+  .dashboard-page .mast h1{max-width:100%;margin:44px 0 16px;font-size:clamp(36px,11vw,43px);line-height:1;letter-spacing:-.05em;text-wrap:pretty;overflow-wrap:break-word}
+  .dashboard-page .mast p{font-size:15px;line-height:1.5}
+  .dashboard-page .window{display:flex;width:100%;gap:8px;margin-top:24px}
+  .dashboard-page .window>span:not(.freshness){width:100%;padding:0;border:0}
+  .dashboard-page .window .freshness{margin:5px 0 0}
+  .dashboard-page main{padding:24px 0 60px}
+  .dashboard-page section{margin-bottom:18px;padding:22px 18px;border-radius:16px}
+  .dashboard-page .section-head{margin-bottom:22px}
+  .dashboard-page .section-head h2{font-size:24px}
+  .dashboard-page .section-head p{font-size:13px}
+  .dashboard-page .coverage{max-width:none;font-size:10px}
+  .dashboard-page .section-head>div,.dashboard-page .metrics,.dashboard-page .metric,.dashboard-page .coverage,.dashboard-page .table-wrap{min-width:0}
+  .dashboard-page .coverage,.dashboard-page .table-wrap{width:100%;max-width:100%}
+  .dashboard-page .metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .dashboard-page .metrics .primary{grid-column:span 2}
+  .dashboard-page .metric{min-height:126px;padding:17px}
+  .dashboard-page .metric.primary{min-height:142px}
+  .dashboard-page .metric .value{font-size:34px}
+  .dashboard-page .metric .label{margin-top:22px;font-size:11px}
+  .dashboard-page .metric .note{font-size:10px}
+  .dashboard-page .subpanel{padding:18px}
+  .dashboard-page .quadrant{grid-template-columns:1fr auto;gap:8px 14px;margin-bottom:18px}
+  .dashboard-page .quadrant .bar-track{grid-column:1/-1;grid-row:2}
+  .dashboard-page .quadrant .number{grid-column:2;grid-row:1;text-align:right}
+  .dashboard-page table{min-width:980px}
+  .dashboard-page th,.dashboard-page td{padding:12px 13px}
+  .dashboard-page .activity-panel{padding:18px}
+  .dashboard-page .activity-head{display:block;margin-bottom:16px}
+  .dashboard-page .heat-legend{margin-top:12px}
+  .dashboard-page .activity-grid{grid-template-columns:repeat(26,minmax(6px,1fr));gap:4px}
+  .dashboard-page .week-cell{height:20px}
+  .dashboard-page .activity-labels{display:none}
+  .dashboard-page .occasion-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .dashboard-page .occasion{min-height:92px;padding:15px}
+  .dashboard-page .action{padding:20px}
+  .dashboard-page .method{gap:10px}
+}
+@media print{
+  .dashboard-page{background:#FFFFFF}
+  .dashboard-page .mast{background:#FFFFFF}
+  .dashboard-page section{box-shadow:none}
+}
 """
 
 _HERO_READABILITY_CSS = f"""
@@ -93,6 +419,69 @@ _HERO_READABILITY_CSS = f"""
 .dashboard-hero .package-grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:0 14px 14px}}
 .dashboard-hero .package-item{{min-height:82px;padding:8px 12px;display:flex;align-items:center}}
 .dashboard-hero .hero-bottom{{padding-top:18px}}
+"""
+
+_REAL_HERO_CSS = r"""
+*{box-sizing:border-box}
+html,body{width:1080px;height:1350px;margin:0;padding:0;overflow:hidden;background:#F4F7FB}
+.launch-hero-page{
+  width:1080px;
+  height:1350px;
+  overflow:hidden;
+  padding:38px;
+  background:
+    radial-gradient(circle at 8% 2%,rgba(38,100,236,.11),transparent 31rem),
+    #F4F7FB;
+  color:#101828;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Segoe UI",sans-serif;
+}
+.launch-hero-sheet{
+  height:1274px;
+  overflow:hidden;
+  padding:44px 46px 34px;
+  border:1px solid #D7E0EC;
+  border-radius:28px;
+  background:rgba(255,255,255,.97);
+  box-shadow:0 28px 80px rgba(31,50,81,.10);
+}
+.launch-hero-top{display:flex;align-items:center;justify-content:space-between;gap:24px}
+.launch-hero-brand{display:flex;align-items:center;gap:13px;color:#344054;font-size:21px;font-weight:780;letter-spacing:.08em;text-transform:uppercase}
+.launch-hero-brand::before{width:15px;height:15px;border-radius:5px;background:#2664EC;box-shadow:0 0 0 7px rgba(38,100,236,.10);content:""}
+.launch-coverage{padding:11px 17px;border:1px solid rgba(38,100,236,.28);border-radius:999px;background:#EEF3FF;color:#1D4ED8;font-size:20px;font-weight:720}
+.launch-hero-title{max-width:920px;margin:44px 0 12px;color:#101828;font-size:66px;font-weight:790;letter-spacing:-.052em;line-height:.98;text-wrap:balance}
+.candidate-b .launch-hero-title{max-width:900px;font-size:64px}
+.launch-hero-sub{max-width:910px;margin:0;color:#5C6B82;font-size:27px;line-height:1.25;text-wrap:pretty}
+.launch-window{margin-top:14px;color:#344054;font-size:20px;font-weight:690;font-variant-numeric:tabular-nums}
+.launch-stats{display:grid;grid-template-columns:1.05fr 1.2fr .8fr;gap:12px;margin-top:28px}
+.launch-stat{min-height:112px;padding:16px 18px;border:1px solid #DCE3ED;border-radius:16px;background:#FBFCFE}
+.launch-stat.primary{border-color:#2664EC;background:#2664EC;color:#FFFFFF;box-shadow:0 12px 28px rgba(38,100,236,.20)}
+.launch-stat b{display:block;font-size:45px;font-weight:770;letter-spacing:-.045em;line-height:1;font-variant-numeric:tabular-nums}
+.launch-stat span{display:block;margin-top:11px;color:#667085;font-size:20px;font-weight:650}
+.launch-stat.primary span{color:#EEF3FF}
+.launch-product{margin-top:18px;padding:18px;border:1px solid #D9E1EC;border-radius:18px;background:#F7F9FC}
+.launch-product-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:13px}
+.launch-product-head h2{margin:0;color:#1D2939;font-size:25px;font-weight:750;letter-spacing:-.025em}
+.launch-product-head span{color:#667085;font-size:18px}
+.launch-quadrants{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.launch-quadrant{min-height:128px;padding:14px;border:1px solid #DCE3ED;border-radius:14px;background:#FFFFFF}
+.launch-quadrant b{display:block;color:#101828;font-size:34px;font-weight:760;letter-spacing:-.035em;line-height:1;font-variant-numeric:tabular-nums}
+.launch-quadrant strong{display:block;min-height:42px;margin-top:8px;color:#344054;font-size:17px;line-height:1.15}
+.launch-quadrant small{display:block;margin-top:4px;color:#667085;font-size:16px}
+.launch-bar{display:block;height:8px;margin-top:10px;overflow:hidden;border-radius:999px;background:#E6EBF3}
+.launch-bar i{display:block;height:100%;border-radius:999px;background:#2664EC}
+.launch-comparison{margin-top:14px;overflow:hidden;border:1px solid #D9E1EC;border-radius:16px;background:#FFFFFF}
+.launch-comparison-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid #E1E7EF}
+.launch-comparison-head h2{margin:0;color:#1D2939;font-size:24px;font-weight:750;letter-spacing:-.02em}
+.launch-comparison-head span{color:#667085;font-size:16px}
+.launch-table-head,.launch-row{display:grid;grid-template-columns:1.25fr .72fr .8fr .8fr 1.05fr;align-items:center;column-gap:12px;padding:9px 16px}
+.launch-table-head{background:#F7F9FC;color:#667085;font-size:13px;font-weight:760;letter-spacing:.055em;text-transform:uppercase}
+.launch-row{min-height:50px;border-top:1px solid #E6EBF2;color:#344054;font-size:17px}
+.launch-row:nth-child(odd){background:#FAFBFD}
+.launch-row strong{color:#1D2939;font-size:18px;font-weight:720}
+.launch-row .num{text-align:right;font-variant-numeric:tabular-nums}
+.launch-row .posture{color:#1D4ED8;font-weight:700}
+.launch-footer{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-top:15px;color:#667085;font-size:16px}
+.launch-footer strong{color:#344054;font-weight:720}
 """
 
 
@@ -169,11 +558,111 @@ def _quadrant_rows(summary: Mapping[str, Any]) -> str:
         rows.append(
             '<div class="quadrant">'
             f'<span class="label">{_e(row.get("name"))}</span>'
+            '<span class="bar-track" aria-hidden="true">'
             f'<span class="bar {classes[index]}" style="width:{width:.2f}%"></span>'
+            "</span>"
             f'<span class="number">{count:,} / {total:,}<br>{_pct(count,total)}</span>'
             "</div>"
         )
     return "".join(rows)
+
+
+def derive_dashboard_weekly_activity(
+    records: Iterable[Mapping[str, Any]], summary: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Build 52 view-only activity buckets without mutating the census.
+
+    The full observed range is partitioned into 52 contiguous planning weeks.
+    A 366-day range therefore contains a small number of 8-day edge buckets.
+    The counts come only from qualified broadcasts and must cross-foot to the
+    locked broadcast denominator before the dashboard can render them.
+    """
+
+    metadata = summary.get("metadata", {})
+    try:
+        first = date.fromisoformat(str(metadata.get("first_observed") or ""))
+        last = date.fromisoformat(str(metadata.get("last_observed") or ""))
+    except ValueError as exc:
+        raise HeroRenderError("weekly activity requires the observed date window") from exc
+    if last < first:
+        raise HeroRenderError("weekly activity date window is reversed")
+    span_days = (last - first).days + 1
+    counts = [0] * 52
+    for record in records:
+        if str(record.get("scope") or "") != "broadcast":
+            continue
+        raw = str(record.get("canonical_received_at") or "")
+        if not raw:
+            raise HeroRenderError("qualified broadcast is missing its receipt timestamp")
+        try:
+            observed = datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
+        except ValueError as exc:
+            raise HeroRenderError("qualified broadcast has an invalid receipt timestamp") from exc
+        if observed < first or observed > last:
+            raise HeroRenderError("qualified broadcast falls outside the frozen window")
+        index = min(51, ((observed - first).days * 52) // span_days)
+        counts[index] += 1
+
+    expected = int(summary.get("broadcast_count", 0))
+    if sum(counts) != expected:
+        raise HeroRenderError("weekly activity does not cross-foot to qualified broadcasts")
+
+    buckets: list[dict[str, Any]] = []
+    for index, count in enumerate(counts):
+        start_offset = (index * span_days) // 52
+        next_offset = ((index + 1) * span_days) // 52
+        bucket_start = first + timedelta(days=start_offset)
+        bucket_end = first + timedelta(days=max(start_offset, next_offset - 1))
+        buckets.append(
+            {
+                "start": bucket_start.isoformat(),
+                "end": min(bucket_end, last).isoformat(),
+                "count": count,
+            }
+        )
+    return buckets
+
+
+def _activity_heatmap(summary: Mapping[str, Any]) -> str:
+    """Render the 52 view-only activity buckets supplied by the real build."""
+
+    raw_buckets = summary.get("_dashboard_weekly_activity", [])
+    buckets = [dict(item) for item in raw_buckets if isinstance(item, Mapping)]
+    if len(buckets) != 52:
+        return ""
+    maximum = max((int(item.get("count", 0)) for item in buckets), default=0)
+    cells: list[str] = []
+    for index, bucket in enumerate(buckets, start=1):
+        count = int(bucket.get("count", 0))
+        level = min(4, max(1, (count * 4 + maximum - 1) // maximum)) if count and maximum else 0
+        label = (
+            f"Week {index}: {bucket.get('start')} to {bucket.get('end')}, "
+            f"{count:,} qualified broadcasts"
+        )
+        cells.append(
+            f'<span class="week-cell level-{level}" title="{_e(label)}" aria-hidden="true"></span>'
+        )
+    label_indices = (0, 13, 26, 39, 51)
+    labels = "".join(
+        f"<span>{_e(str(buckets[index].get('start') or '')[:7])}</span>"
+        for index in label_indices
+    )
+    legend = "".join(
+        f'<span class="week-cell level-{level}" aria-hidden="true"></span>'
+        for level in range(1, 5)
+    )
+    return (
+        '<div class="activity-panel">'
+        '<div class="activity-head"><div>'
+        '<h3>52-week activity heatmap</h3>'
+        '<p>Qualified broadcast receipts across 52 contiguous planning weeks. '
+        "Darker cells mean more observed sends, not better performance.</p>"
+        '</div><div class="heat-legend"><span>Lower</span>'
+        f'<span class="legend-cells">{legend}</span><span>Higher volume</span></div></div>'
+        '<div class="activity-grid" role="img" aria-label="52-week qualified-broadcast activity heatmap. Performance is not inferred.">'
+        f"{''.join(cells)}</div>"
+        f'<div class="activity-labels" aria-hidden="true">{labels}</div></div>'
+    )
 
 
 def _brand_table(summary: Mapping[str, Any]) -> str:
@@ -229,10 +718,19 @@ def render_dashboard(summary: Mapping[str, Any], title: str = "The Competitor In
     meta = summary.get("metadata", {})
     total = int(summary.get("broadcast_count", 0))
     brands = int(summary.get("brand_count", 0))
+    distinct_messages = int(
+        summary.get("pipeline", {}).get("distinct_messages")
+        or sum(int(value or 0) for value in summary.get("scope_counts", {}).values())
+        or total
+    )
     q = {row["name"]: row for row in summary.get("quadrants", [])}
     evergreen = int(q.get("Evergreen content", {}).get("count", 0))
     coverage = _coverage(summary)
-    body_class = "prototype" if meta.get("illustrative_prototype") else ""
+    body_class = (
+        "dashboard-page prototype"
+        if meta.get("illustrative_prototype")
+        else "dashboard-page"
+    )
     source_completeness = str(meta.get("source_completeness") or "")
     source_note = _source_completeness_note(source_completeness)
     visible_findings = [
@@ -281,10 +779,10 @@ def render_dashboard(summary: Mapping[str, Any], title: str = "The Competitor In
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="{_e(_CSP)}"><meta name="referrer" content="no-referrer">
-<title>{_e(title)}</title><style>{_CSS}</style></head>
+<title>{_e(title)}</title><style>{_CSS}{_DASHBOARD_POLISH_CSS}</style></head>
 <body class="{body_class}"><header class="mast"><div class="shell"><div class="brandline"><span class="brand">ZHS Ecom | Competitive Email Intelligence</span>{_stamp(summary)}</div>
 <h1>{_e(title)}</h1><p>A private view of competitor cadence, content mix, offers, and seasonal timing from emails already in an inbox you control.</p>
-<div class="window"><span><b>{total:,}</b> qualified broadcasts</span><span><b>{brands}</b> brands</span><span><b>{_e(_date_window(meta))}</b></span><span class="freshness" role="status">{_e(freshness)}</span></div></div></header>
+<div class="window"><span><b>{distinct_messages:,}</b> distinct messages</span><span><b>{total:,}</b> qualified broadcasts</span><span><b>{brands}</b> brands</span><span><b>{_e(_date_window(meta))}</b></span><span class="freshness">{_e(_source_completeness_label(source_completeness))}</span><span class="freshness" role="status">{_e(freshness)}</span></div></div></header>
 <main class="shell">
 <section aria-labelledby="executive"><div>{_section_head('Executive Brief','The owner-level read on what competitors are sending and where the calendar has room.',coverage)}</div>
 <div class="metrics"><div class="metric primary"><span class="value">{total:,}</span><span class="label">Qualified broadcasts</span><span class="note">Lifecycle excluded</span></div>
@@ -294,7 +792,7 @@ def render_dashboard(summary: Mapping[str, Any], title: str = "The Competitor In
 <section aria-labelledby="comparison">{_section_head('Competitor Comparison','Compare planning mix and strategic posture using qualified broadcasts only.',coverage)}{_brand_table(summary)}</section>
 <section aria-labelledby="engine">{_section_head('Evergreen and Promotional Engine','Offer status and seasonality are independent, so the 4-part census stays useful for planning.',coverage)}
 <div class="grid-two"><div class="subpanel"><h3>Four-quadrant census</h3>{_quadrant_rows(summary)}</div><div class="subpanel"><h3>What stands out</h3><div class="finding-list">{findings}</div></div></div></section>
-<section aria-labelledby="seasonal">{_section_head('Seasonal Planner',annual_copy,seasonal_coverage)}<div class="occasion-grid">{occasions}</div></section>
+<section aria-labelledby="seasonal">{_section_head('Seasonal Planner',annual_copy,seasonal_coverage)}{_activity_heatmap(summary)}<div class="occasion-grid">{occasions}</div></section>
 <section aria-labelledby="library">{_section_head('Messaging Library','Browse recent sanitized subjects by scope. Only broadcasts feed the strategy metrics.',coverage)}
 <div class="scope-grid"><div class="scope-block"><h3>Broadcast</h3>{_messages(summary,'broadcast')}</div><div class="scope-block"><h3>Lifecycle</h3>{_messages(summary,'lifecycle')}</div><div class="scope-block"><h3>Uncertain</h3>{_messages(summary,'uncertain')}</div></div></section>
 <section aria-labelledby="action">{_section_head('Owner Action Plan','Turn the census into the next planning conversation without treating inbox activity as performance.',coverage)}
@@ -867,7 +1365,90 @@ def _hero_context(summary: Mapping[str, Any], variant: str) -> dict[str, Any]:
     }
 
 
+def _render_real_launch_hero(summary: Mapping[str, Any], variant: str) -> str:
+    """Render a multi-brand, screenshot-first view of the frozen real census."""
+
+    metadata = summary.get("metadata", {})
+    pipeline = summary.get("pipeline", {})
+    scopes = summary.get("scope_counts", {})
+    distinct = int(
+        pipeline.get("distinct_messages")
+        or sum(int(value or 0) for value in scopes.values())
+        or summary.get("broadcast_count", 0)
+    )
+    broadcasts = int(summary.get("broadcast_count", 0))
+    brands = int(summary.get("brand_count", 0))
+    lifecycle = int(scopes.get("lifecycle", 0) or 0)
+    uncertain = int(scopes.get("uncertain", 0) or 0)
+    coverage_label = _source_completeness_label(
+        str(metadata.get("source_completeness") or "")
+    )
+    title = (
+        f"{distinct:,} competitor emails, mapped into one planning dashboard."
+        if variant == "brand"
+        else f"See what {brands} competitors sent before you plan the next quarter."
+    )
+    subtitle = (
+        f"{broadcasts:,} qualified broadcasts after {lifecycle:,} lifecycle and "
+        f"{uncertain:,} uncertain messages were separated."
+        if variant == "brand"
+        else (
+            f"One strategy view across {distinct:,} distinct messages and "
+            f"{broadcasts:,} qualified broadcasts."
+        )
+    )
+    quadrant_cards: list[str] = []
+    for row in summary.get("quadrants", []):
+        if not isinstance(row, Mapping):
+            continue
+        count = int(row.get("count", 0))
+        width = max(0.2, 100 * count / broadcasts) if broadcasts else 0.2
+        quadrant_cards.append(
+            '<div class="launch-quadrant">'
+            f"<b>{count:,}</b>"
+            f"<strong>{_e(row.get('name'))}</strong>"
+            f"<small>{_pct(count, broadcasts)}</small>"
+            '<span class="launch-bar" aria-hidden="true">'
+            f'<i style="width:{width:.2f}%"></i></span></div>'
+        )
+
+    comparison_rows: list[str] = []
+    for brand in list(summary.get("brands", []))[:4]:
+        if not isinstance(brand, Mapping):
+            continue
+        quadrants = dict(brand.get("quadrants", {}) or {})
+        evergreen = int(quadrants.get("Evergreen content", 0))
+        promotion = int(quadrants.get("Everyday promotion", 0)) + int(
+            quadrants.get("Seasonal promotion", 0)
+        )
+        posture = str(brand.get("posture", {}).get("label") or "Mixed")
+        comparison_rows.append(
+            '<div class="launch-row">'
+            f"<strong>{_e(brand.get('brand'))}</strong>"
+            f'<span class="num">{int(brand.get("qualified_broadcasts", 0)):,}</span>'
+            f'<span class="num">{evergreen:,}</span>'
+            f'<span class="num">{promotion:,}</span>'
+            f'<span class="posture">{_e(posture)}</span>'
+            "</div>"
+        )
+
+    candidate_class = "candidate-a" if variant == "brand" else "candidate-b"
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=1080">
+<meta http-equiv="Content-Security-Policy" content="{_e(_CSP)}"><meta name="referrer" content="no-referrer"><title>Competitor Inbox real dashboard</title><style>{_REAL_HERO_CSS}</style></head>
+<body><main class="launch-hero-page"><article class="launch-hero-sheet {candidate_class}" data-census-scope="portfolio-dashboard">
+<div class="launch-hero-top"><span class="launch-hero-brand">The Competitor Inbox</span><span class="launch-coverage">{_e(coverage_label)}</span></div>
+<h1 class="launch-hero-title">{_e(title)}</h1><p class="launch-hero-sub">{_e(subtitle)}</p><div class="launch-window">{_e(_date_window(metadata))}</div>
+<div class="launch-stats"><div class="launch-stat"><b>{distinct:,}</b><span>Distinct messages</span></div><div class="launch-stat primary"><b>{broadcasts:,}</b><span>Qualified broadcasts</span></div><div class="launch-stat"><b>{brands}</b><span>Brands</span></div></div>
+<div class="launch-product"><div class="launch-product-head"><h2>Evergreen and promotional engine</h2><span>n={broadcasts:,} broadcasts</span></div><div class="launch-quadrants">{''.join(quadrant_cards)}</div></div>
+<div class="launch-comparison"><div class="launch-comparison-head"><h2>Competitor comparison</h2><span>Top rows from the real census</span></div>
+<div class="launch-table-head"><span>Brand</span><span>Broadcasts</span><span>Evergreen</span><span>Promotion</span><span>Posture</span></div>{''.join(comparison_rows)}</div>
+<div class="launch-footer"><strong>Inbox behavior, not performance.</strong><span>Lifecycle excluded from broadcast metrics.</span></div>
+</article></main></body></html>"""
+
+
 def render_hero(summary: Mapping[str, Any], variant: str = "brand") -> str:
+    if not summary.get("metadata", {}).get("illustrative_prototype"):
+        return _render_real_launch_hero(summary, variant)
     context = _hero_context(summary, variant)
     meta = summary.get("metadata", {})
     total = int(context["total"])
@@ -1084,6 +1665,7 @@ def write_freeze_manifest(
     output_path: str | Path,
     *,
     screenshot_paths: Iterable[str | Path] = (),
+    section_capture_paths: Iterable[str | Path] = (),
     git_sha: str = "",
     git_dirty: bool = True,
 ) -> Path:
@@ -1119,6 +1701,32 @@ def write_freeze_manifest(
                 "visual_audit": visual_audit,
             }
         )
+    section_captures = [
+        Path(path).expanduser().resolve() for path in section_capture_paths
+    ]
+    if section_captures:
+        section_names = [path.name for path in section_captures]
+        if len(section_names) != len(set(section_names)) or set(section_names) != set(
+            _SECTION_CAPTURE_NAMES
+        ):
+            raise HeroRenderError(
+                "freeze requires all 8 canonical real-dashboard section captures"
+            )
+    section_capture_entries = []
+    for path in sorted(section_captures, key=lambda candidate: candidate.name):
+        width, height = _png_dimensions(path)
+        if width < 1000 or height < 200:
+            raise HeroRenderError(
+                "frozen dashboard section capture is below the readability floor"
+            )
+        section_capture_entries.append(
+            {
+                "path": path.name,
+                "sha256": _sha256(path),
+                "width": width,
+                "height": height,
+            }
+        )
     census_bytes = json.dumps(summary, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     frozen_metrics = _freeze_metrics(summary)
     manifest = {
@@ -1133,8 +1741,25 @@ def write_freeze_manifest(
         ),
         "census_sha256": hashlib.sha256(census_bytes).hexdigest(),
         "dashboard": {"path": str(dashboard), "sha256": _sha256(dashboard)},
-        "hero_html": [{"path": str(path), "sha256": _sha256(path)} for path in heroes],
+        "hero_html": [
+            {
+                "path": str(path),
+                "sha256": _sha256(path),
+                "role": (
+                    "primary_dashboard"
+                    if path.name == "hero-brand.html"
+                    else "secondary_portfolio"
+                ),
+                "scope": (
+                    "portfolio-dashboard"
+                    if not summary.get("metadata", {}).get("illustrative_prototype")
+                    else "synthetic-demo"
+                ),
+            }
+            for path in heroes
+        ],
         "screenshots": screenshot_entries,
+        "section_captures": section_capture_entries,
         "window": {
             "first": summary.get("metadata", {}).get("first_observed", ""),
             "last": summary.get("metadata", {}).get("last_observed", ""),

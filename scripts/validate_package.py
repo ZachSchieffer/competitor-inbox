@@ -211,6 +211,7 @@ def _identifier_spans(text: str) -> list[tuple[int, int]]:
 
     patterns = (
         URL_RE,
+        re.compile(r"\b\d{1,2}:\d{2}\s*(?:AM|PM)\b", re.IGNORECASE),
         re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{40}(?![0-9A-Fa-f])"),
         re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{64}(?![0-9A-Fa-f])"),
         re.compile(r"\bv\d+(?:\.\d+){1,3}\b", re.IGNORECASE),
@@ -370,6 +371,7 @@ _ASANA_OPERATIONAL_CONTEXTS = tuple(
     for pattern in (
         r"^(?:Immutable tag|Tag URL|Git SHA|Main image|Pinned image|Repo release):",
         r"^[-*]\s+(?:Hero attachment|Pinned-comment attachment|Census SHA|Dashboard SHA|Repo release):",
+        r"^\d+[.)]\s+Launch:\s+Thursday July \d+,\s+\d{1,2}:\d{2}\s+(?:AM|PM)\s+Phoenix\.\s+Do not post before this time\.$",
         r"^\d+[.)]\s+Zach publishes the post with",
         r"^\d+[.)]\s+After the post is live, attach",
         r"^\d+[.)]\s+Bolu or Michelle covers the first \d+ hours.*\b\d+ hours\b",
@@ -1103,7 +1105,8 @@ def validate_manifest(manifest_path: Path, *, allow_partial: bool = False) -> di
         issues.append(Issue("manifest", "missing_required_image"))
     frozen_hashes = {
         str(item.get("sha256"))
-        for item in (screenshot_manifest or {}).get("screenshots", [])
+        for collection in ("screenshots", "section_captures")
+        for item in (screenshot_manifest or {}).get(collection, [])
         if isinstance(item, dict) and _valid_sha256(item.get("sha256"))
     }
     package_hashes: set[str] = set()

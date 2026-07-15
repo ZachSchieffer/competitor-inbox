@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import re
 import struct
@@ -13,6 +14,7 @@ import competitor_inbox.dashboard as dashboard_module
 from competitor_inbox.dashboard import (
     HeroRenderError,
     audit_hero_png,
+    derive_dashboard_weekly_activity,
     generate_dashboard,
     render_dashboard,
     render_hero_pngs,
@@ -58,6 +60,66 @@ def test_dashboard_is_static_local_and_has_restrictive_csp(tmp_path: Path) -> No
     assert "connect-src &#x27;none&#x27;" in document
     assert "form-action &#x27;none&#x27;" in document
     assert "@media(max-width:900px)" in document
+
+
+def test_dashboard_premium_visual_system_is_static_and_mobile_ready() -> None:
+    summary = demo_summary()
+    before = deepcopy(summary)
+    records = [
+        {
+            "scope": "broadcast",
+            "canonical_received_at": "2026-01-01T08:00:00Z",
+        }
+        for _ in range(summary["broadcast_count"])
+    ]
+    summary["_dashboard_weekly_activity"] = derive_dashboard_weekly_activity(
+        records, summary
+    )
+    document = render_dashboard(summary)
+
+    assert {key: value for key, value in summary.items() if key != "_dashboard_weekly_activity"} == before
+    assert "--accent:#2664EC" in document
+    assert 'font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display"' in document
+    assert '<body class="dashboard-page prototype">' in document
+    assert document.count('class="bar-track"') == 4
+    assert document.count('title="Week ') == 52
+    assert 'class="activity-grid"' in document
+    assert "52-week activity heatmap" in document
+    assert "Qualified broadcast receipts across 52 contiguous planning weeks" in document
+    assert "<b>1,260</b> distinct messages" in document
+    assert "Source completeness unavailable" in document
+    assert "grid-template-columns:repeat(52" in document
+    assert "grid-template-columns:repeat(26" in document
+    assert ".dashboard-page tbody tr:nth-child(even)" in document
+    assert ".dashboard-page th:first-child,.dashboard-page td:first-child" in document
+    assert "<script" not in document.casefold()
+    assert "http://" not in document.casefold()
+    assert "https://" not in document.casefold()
+
+
+def test_weekly_activity_is_view_only_and_cross_foots() -> None:
+    summary = {
+        "broadcast_count": 3,
+        "metadata": {
+            "first_observed": "2025-07-14",
+            "last_observed": "2026-07-14",
+        },
+    }
+    before = deepcopy(summary)
+    records = [
+        {"scope": "broadcast", "canonical_received_at": "2025-07-14T00:00:00Z"},
+        {"scope": "broadcast", "canonical_received_at": "2026-01-14T00:00:00Z"},
+        {"scope": "broadcast", "canonical_received_at": "2026-07-14T00:00:00Z"},
+        {"scope": "lifecycle", "canonical_received_at": "2026-01-14T00:00:00Z"},
+    ]
+
+    buckets = derive_dashboard_weekly_activity(records, summary)
+
+    assert summary == before
+    assert len(buckets) == 52
+    assert sum(int(bucket["count"]) for bucket in buckets) == 3
+    assert buckets[0]["start"] == "2025-07-14"
+    assert buckets[-1]["end"] == "2026-07-14"
 
 
 def test_demo_dashboard_marks_every_surface_and_matches_frozen_counts(tmp_path: Path) -> None:
@@ -139,6 +201,34 @@ def test_hero_candidates_are_1080_by_1350_screenshot_ready(tmp_path: Path) -> No
     assert "Daily 7:00 AM local update" not in candidates[1].read_text(
         encoding="utf-8"
     )
+
+
+def test_real_hero_candidates_use_multi_brand_product_ui(tmp_path: Path) -> None:
+    summary = demo_summary()
+    summary["metadata"]["illustrative_prototype"] = False
+    summary["metadata"]["source_completeness"] = "partial"
+    summary["pipeline"]["distinct_messages"] = 1_300
+    summary["scope_counts"] = {
+        "broadcast": 1_260,
+        "lifecycle": 39,
+        "uncertain": 1,
+    }
+
+    candidates = write_hero_candidates(summary, tmp_path)
+
+    for path in candidates:
+        document = path.read_text(encoding="utf-8")
+        assert "ILLUSTRATIVE PROTOTYPE" not in document
+        assert "1,300" in document
+        assert "1,260" in document
+        assert "10" in document
+        assert "Partial source coverage" in document
+        assert "Evergreen and promotional engine" in document
+        assert "Competitor comparison" in document
+        assert summary["brands"][0]["brand"] in document
+        assert "<script" not in document.casefold()
+        assert "http://" not in document.casefold()
+        assert "https://" not in document.casefold()
 
 
 def test_hero_support_copy_is_legible_at_linkedin_feed_scale(tmp_path: Path) -> None:
@@ -676,6 +766,64 @@ def test_freeze_manifest_hashes_dashboard_heroes_and_finished_screenshots(tmp_pa
         "count": 580,
         "percentage": 46.0,
     }
+
+
+def test_freeze_manifest_hashes_all_real_dashboard_section_captures(
+    tmp_path: Path,
+) -> None:
+    summary = demo_summary()
+    dashboard = generate_dashboard(summary, tmp_path / "dashboard.html")
+    heroes = write_hero_candidates(summary, tmp_path / "heroes")
+    section_names = (
+        "01-header.png",
+        "02-executive-brief.png",
+        "03-competitor-comparison.png",
+        "04-evergreen-promotional-engine.png",
+        "05-seasonal-planner.png",
+        "06-messaging-library.png",
+        "07-action-plan.png",
+        "08-coverage-methodology.png",
+    )
+    section_paths = []
+    for name in section_names:
+        path = tmp_path / name
+        path.write_bytes(_hero_png(width=1280, height=346))
+        section_paths.append(path)
+
+    output = write_freeze_manifest(
+        summary,
+        dashboard,
+        heroes,
+        tmp_path / "freeze.json",
+        section_capture_paths=section_paths,
+    )
+    manifest = json.loads(output.read_text(encoding="utf-8"))
+
+    assert [entry["path"] for entry in manifest["section_captures"]] == list(
+        section_names
+    )
+    assert all(entry["width"] == 1280 for entry in manifest["section_captures"])
+    assert all(entry["height"] == 346 for entry in manifest["section_captures"])
+    assert all(len(entry["sha256"]) == 64 for entry in manifest["section_captures"])
+
+
+def test_freeze_requires_the_complete_canonical_section_capture_set(
+    tmp_path: Path,
+) -> None:
+    summary = demo_summary()
+    dashboard = generate_dashboard(summary, tmp_path / "dashboard.html")
+    heroes = write_hero_candidates(summary, tmp_path / "heroes")
+    partial = tmp_path / "01-header.png"
+    partial.write_bytes(_hero_png(width=1280, height=346))
+
+    with pytest.raises(HeroRenderError, match="all 8 canonical"):
+        write_freeze_manifest(
+            summary,
+            dashboard,
+            heroes,
+            tmp_path / "freeze.json",
+            section_capture_paths=[partial],
+        )
 
 
 def test_dashboard_hero_and_manifest_files_are_private(tmp_path: Path) -> None:

@@ -30,6 +30,7 @@ from .config import (
 from .coverage import coverage_markdown
 from .dashboard import (
     _freeze_metrics,
+    derive_dashboard_weekly_activity,
     generate_dashboard,
     hero_selection,
     render_hero,
@@ -266,7 +267,13 @@ def _render_real(
         hero_screenshots = []
         for hero in hero_paths:
             _remove_private_file(hero.with_suffix(".png"))
-    dashboard = generate_dashboard(summary, store.root / "outputs" / "dashboard.html")
+    dashboard_summary = dict(summary)
+    dashboard_summary["_dashboard_weekly_activity"] = derive_dashboard_weekly_activity(
+        records, summary
+    )
+    dashboard = generate_dashboard(
+        dashboard_summary, store.root / "outputs" / "dashboard.html"
+    )
     atomic_write_json(store.root / "outputs" / "census.json", summary)
     git_sha, git_dirty = _git_state()
     freeze = write_freeze_manifest(
