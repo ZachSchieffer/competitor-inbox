@@ -833,3 +833,103 @@ evidence from local and automated runs can be compared directly.
 - Status: complete. The public visual source is pinned separately from the
   historical release, and downstream launch assets are regenerated only from
   a clean checkout of that exact commit.
+
+## 2026-07-15: Phase 2 preserved the launch freeze
+
+- Authority: Phase 2 launch-freeze boundary.
+- Decision: keep `main`, live Notion, Asana, the launch heroes, the pinned
+  proof card, scroll video, launch copy, and every frozen hash unchanged while
+  Phase 2 work proceeds on private storage and `v1.1-dev` only.
+- Evidence: independent integrity audit confirmed local, origin, and remote
+  `main` at `a62e4cc73ceffe7637217f8af1ab3ee152466ddb`; all launch and copy hashes
+  match; the full Git privacy audit reports 0 violations.
+- Impact: the Thursday launch package remains reproducible and isolated from
+  the background renderer and gallery work.
+
+## 2026-07-15: The creative gallery is private-manifest driven
+
+- Authority: Gallery v1.1 and data-isolation requirements.
+- Decision: build the gallery on `v1.1-dev` from a private, fail-closed safe
+  thumbnail manifest. Embed validated local PNG, JPEG, or WebP bytes as data
+  URIs, cap each brand at 5 previews, and show explicit ready, insufficient,
+  or unavailable states for every census brand.
+- Reason: the public repository can own renderer and UI behavior without
+  carrying production paths, IDs, subjects, bodies, URLs, or creative files.
+- Evidence: 324 tests pass; privacy audit reports 0 violations; the current
+  private sample renders 125 previews across 32 brands, while the gallery
+  covers all 33 census brands through explicit states: 31 ready, Four
+  Sigmatic insufficient at 1, and LMNT unavailable at 0.
+- Limitation: the dashboard HTML is about 8.3 MB with 125 embedded thumbnails,
+  and the gallery consumes rather than generates the private manifest.
+
+## 2026-07-15: Full-archive renders require uniform hardened provenance
+
+- Authority: full-archive render, privacy isolation, and anti-stall rules.
+- Decision: retain the original render attempts as audit evidence but exclude
+  them from final accounting after independent review found network,
+  containment, resume-integrity, and decode-boundary gaps. Restart the archive
+  under a new private pipeline version only after offline safety tests pass.
+- Controls: direct pinned-IP TLS on port 443 with hostname certificate checks,
+  no ambient proxy/cookies/referrer, exact browser file allowlisting, strict
+  URL and redirect policy, bounded raster and embedded-image decoding, local
+  OCR privacy checks, master-bound retry and success state, artifact-aware
+  resume validation, private modes, free-space reserve, transient sanitized
+  HTML deletion, and explicit partial/complete accounting.
+- Final evidence: pipeline `2026-07-15.8` resolved all 3,755 qualified
+  broadcasts against production master SHA-256
+  `2c71899db1f1092e189c124cb4f9ea8f9cc2909031d07c361458e99a1fd565b1`.
+  It produced 2,998 privacy-cleared renders, 755 terminal safety exclusions,
+  and 2 exhausted offline Vision failures, with 0 pending records and 0
+  integrity requeues. The final manifest SHA-256 is
+  `8d6b2ef31c7510ad7b1ae43a3062b5df55179ec14da1f6970b6828a6537871fe`;
+  the ledger SHA-256 is
+  `3db1f2d9c1816164ce146b9f4d3fec5616f1c34f855a7d371860d2e1fe5a6ade`.
+  Report-only resume attempted 0 records, all 2,998 accepted artifact pairs
+  revalidated by path, mode, hash, type, and dimensions, 37 of 37 safety tests
+  passed, and the v7 sanitized staging directory is empty.
+- Residual: a short recipient-specific identifier hidden in an otherwise
+  ordinary clean remote path can be indistinguishable from a legitimate CDN
+  asset slug before fetch. This is disclosed; final outputs remain private and
+  every rendered image passes the local OCR/recipient-term gate.
+
+## 2026-07-15: Durable skills remain provisional and fail closed
+
+- Authority: Phase 2 durable-skills requirement and Zach's canonical voice
+  rules.
+- Decision: install personal `voice-and-copy` and `lead-magnet` skills under
+  `~/.codex/skills`, retain `v1 PROVISIONAL pending Claude-side
+  reconciliation`, and encode the authority order as live Zach instruction,
+  active execution order, skill references, then logged judgment.
+- Controls: canonical voice linting, channel playbooks, final editor gate,
+  placeholder/link/frozen-number/keyword/Kit/package validation, combined
+  Notion-plus-post filing support, and explicit manual visual/browser gates.
+- Final evidence: `lead-magnet` passed 62 of 62 tests and
+  `voice-and-copy` passed 10 of 10 tests. Both `quick_validate.py` checks,
+  canonical fixtures, and an independent six-edge adversarial matrix passed.
+- Residual: verified URLs remain a manifest assertion until a logged-out
+  browser check runs; screenshots and binary assets still require visual QA;
+  factual support, keyword collisions, and semantic editorial quality require
+  live project context.
+
+## 2026-07-15: Phase 2 distribution remains locked
+
+- Authority: standing distribution lockdown.
+- Decision: keep the follow-up post labeled `DRAFT - NOT CLEARED - DO NOT
+  POST`, upload production handoff files only to the existing Drive folder,
+  and perform no LinkedIn activity, DMs, connections, announcements, or
+  person-to-person link distribution.
+- Status: unchanged. Zach remains the manual publisher.
+
+## 2026-07-15: Repository validation uses an isolated home
+
+- Authority: preserve the installed production scheduler while proving the
+  public package independently.
+- Decision: run the full repository suite with a temporary `HOME` and
+  `PYTHONPATH=src` instead of removing or renaming the live LaunchAgent.
+- Reason: the dry-run scheduler test correctly expects no target file in a
+  fresh environment, while this Mac already has the production plist
+  installed. That ambient state is outside the test fixture.
+- Evidence: all 324 tests pass in the isolated environment. The same suite's
+  only failure under the real home is the expected existing-plist assertion.
+- Impact: no production schedule, launch asset, frozen hash, or public branch
+  changed for testing.
